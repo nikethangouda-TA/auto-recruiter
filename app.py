@@ -8,30 +8,33 @@ from sklearn.metrics.pairwise import cosine_similarity
 from pypdf import PdfReader
 import docx
 import io
+from datetime import datetime, timedelta
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Recruiter Speed", layout="wide")
-st.title("⚡ Auto Recruiter: Live Speed Mode")
+st.set_page_config(page_title="Auto Recruiter: Brute Force", layout="wide")
+st.title("🚜 Auto Recruiter: Deep Mining Mode")
 
 # --- SIDEBAR ---
-st.sidebar.header("1. Credentials")
+st.sidebar.header("Credentials")
 email_user = st.sidebar.text_input("Email Address")
 email_pass = st.sidebar.text_input("App Password", type="password")
 
-st.sidebar.header("2. Speed Filter")
-time_options = {
-    "Last 10 Minutes": "10m",
-    "Last 1 Hour": "1h",
-    "Last 24 Hours": "1d",
-    "Last 7 Days": "7d",
-    "Last 1 Year": "1y"
-}
-selected_label = st.sidebar.selectbox("Timeframe:", list(time_options.keys()), index=0)
-time_code = time_options[selected_label]
+# We use simple days now to calculate exact date
+days_back = st.sidebar.number_input("Look back days:", min_value=1, value=365)
+jd = st.text_area("Job Description", height=100, placeholder="Paste JD...")
 
-jd = st.text_area("Job Description", height=100, placeholder="Paste JD here...")
+# --- HELPER FUNCTIONS ---
+def decode_str(header_val):
+    if not header_val: return ""
+    decoded_list = decode_header(header_val)
+    text = ""
+    for t, encoding in decoded_list:
+        if isinstance(t, bytes):
+            text += t.decode(encoding if encoding else "utf-8", errors="ignore")
+        else:
+            text += str(t)
+    return text
 
-# --- TEXT EXTRACTOR ---
 def get_file_content(file_bytes, filename):
     try:
         if filename.lower().endswith(".pdf"):
@@ -44,85 +47,106 @@ def get_file_content(file_bytes, filename):
             doc = docx.Document(io.BytesIO(file_bytes))
             return "\n".join([para.text for para in doc.paragraphs])
     except:
-        return "" # Return empty if read fails
+        return ""
     return ""
 
-# --- EMAIL ENGINE (OPTIMIZED) ---
-def fast_scan(user, password, time_limit):
+# --- THE BRUTE FORCE ENGINE ---
+def run_deep_scan(user, password, days):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try:
         mail.login(user, password)
     except Exception as e:
-        return [], f"Login Error: {e}"
+        return [], [], f"Login Failed: {e}"
 
-    # CRITICAL FIX: Use INBOX (Instant) instead of All Mail (Slow)
-    mail.select("INBOX") 
+    mail.select("INBOX")
 
-    # FASTEST GOOGLE SEARCH
-    search_cmd = f'(X-GM-RAW "has:attachment newer_than:{time_limit}")'
-    status, data = mail.search(None, search_cmd)
+    # 1. CALCULATE EXACT DATE (Format: 01-Jan-2024)
+    since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
+    
+    # 2. STANDARD IMAP SEARCH (No Google "Magic")
+    # We search for ALL emails since date, then filter manually.
+    st.toast(f"Requesting all emails since {since_date}...", icon="📡")
+    typ, data = mail.search(None, f'(SINCE "{since_date}")')
     
     if not data[0]:
         mail.logout()
-        return [], "No emails found in this timeframe."
+        return [], [], "No emails found in this date range."
 
     email_ids = data[0].split()
-    # Batch limit to prevent crashes
-    email_ids = email_ids[-50:] 
+    total_emails = len(email_ids)
     
     resumes = []
-    total_found = len(email_ids)
+    debug_log = []
     
-    status_bar = st.progress(0)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    # Process newest first
+    # 3. ITERATE EVERYTHING (No [-50:] limit)
+    # This might take a moment if you have thousands of emails, but it GUARANTEES accuracy.
     for idx, num in enumerate(reversed(email_ids)):
-        # Update progress
-        status_bar.progress((idx + 1) / total_found)
+        progress_bar.progress((idx + 1) / total_emails)
+        status_text.write(f"Scanning email {idx+1}/{total_emails}...")
         
         _, msg_data = mail.fetch(num, "(RFC822)")
         for response_part in msg_data:
             if isinstance(response_part, tuple):
                 msg = email.message_from_bytes(response_part[1])
+                subject = decode_str(msg["Subject"])
+                sender = msg["From"]
                 
+                # Check for attachments
                 if msg.is_multipart():
+                    has_resume = False
                     for part in msg.walk():
-                        if "attachment" in part.get("Content-Disposition", ""):
-                            filename = part.get_filename()
-                            if filename:
-                                # Decode Filename
-                                decoded_list = decode_header(filename)
-                                filename = ""
-                                for text, encoding in decoded_list:
-                                    if isinstance(text, bytes):
-                                        filename += text.decode(encoding if encoding else "utf-8", errors="ignore")
-                                    else:
-                                        filename += text
+                        # robust check for attachment
+                        content_disposition = str(part.get("Content-Disposition"))
+                        
+                        if "attachment" in content_disposition:
+                            fname = part.get_filename()
+                            if fname:
+                                filename = decode_str(fname)
                                 
+                                # STRICT MATCH
                                 if filename.lower().endswith(('.pdf', '.docx')):
-                                    # DOWNLOAD & READ CONTENT
                                     file_bytes = part.get_payload(decode=True)
                                     content = get_file_content(file_bytes, filename)
                                     
-                                    if len(content) > 50:
+                                    if len(content) > 10:
                                         resumes.append({
-                                            "Candidate": msg["From"],
+                                            "Candidate": sender,
+                                            "Subject": subject,
                                             "File": filename,
                                             "text": content
                                         })
-    
-    mail.logout()
-    return resumes, "Success"
+                                        has_resume = True
+                                        debug_log.append(f"✅ FOUND: {filename} in '{subject}'")
+                                else:
+                                    debug_log.append(f"⚠️ SKIPPED: {filename} (Wrong Type)")
+                        
+                    if not has_resume:
+                         debug_log.append(f"❌ NO ATTACHMENT: Email '{subject}' had no PDF/DOCX")
+                else:
+                    debug_log.append(f"❌ TEXT ONLY: Email '{subject}' is not multipart")
 
-# --- EXECUTION ---
-if st.button("🚀 INSTANT SCAN"):
+    mail.logout()
+    status_text.empty()
+    return resumes, debug_log, "Success"
+
+# --- UI EXECUTION ---
+if st.button("🚀 START DEEP SCAN"):
     if not email_user or not email_pass:
-        st.error("Enter Credentials.")
+        st.error("Credentials required.")
     else:
-        with st.spinner("Scanning Inbox..."):
-            resumes, status = fast_scan(email_user, email_pass, time_code)
+        # Clear previous results
+        resumes = []
+        debug_log = []
+        
+        with st.spinner("Mining Inbox... (This extracts everything)"):
+            resumes, debug_log, status = run_deep_scan(email_user, email_pass, days_back)
             
             if resumes:
+                st.success(f"Found {len(resumes)} Valid Resumes")
+                
                 # RANKING
                 if jd:
                     documents = [jd] + [r['text'] for r in resumes]
@@ -130,17 +154,18 @@ if st.button("🚀 INSTANT SCAN"):
                     tfidf_matrix = vectorizer.fit_transform(documents)
                     cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
                     
-                    # Add scores to results
                     for i, r in enumerate(resumes):
                         r["Match %"] = int(round(cosine_sim[0][i] * 100))
-                        r["Status"] = "Interview" if r["Match %"] > 50 else "Reject"
-                        del r["text"] # Hide raw text from table
+                        r["Status"] = "Interview" if r["Match %"] > 40 else "Reject"
+                        del r["text"] # Clean table
                     
                     df = pd.DataFrame(resumes).sort_values(by="Match %", ascending=False)
-                    st.success(f"Processed {len(resumes)} resumes!")
                     st.dataframe(df, use_container_width=True)
                 else:
-                    st.warning("Found resumes, but need JD to rank them.")
                     st.dataframe(pd.DataFrame(resumes))
             else:
-                st.warning(status)
+                st.error("Still 0? Check the Debug Log below.")
+
+            # FULL TRANSPARENCY LOG
+            with st.expander("🕵️ Detailed Scan Log (See exactly what was skipped)", expanded=False):
+                st.write(debug_log)
