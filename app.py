@@ -11,30 +11,19 @@ import io
 from datetime import datetime, timedelta
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Recruiter: Brute Force", layout="wide")
-st.title("🚜 Auto Recruiter: Deep Mining Mode")
+st.set_page_config(page_title="Auto Recruiter: God Mode", layout="wide")
+st.title("⚡ Auto Recruiter: God Mode")
 
 # --- SIDEBAR ---
 st.sidebar.header("Credentials")
 email_user = st.sidebar.text_input("Email Address")
 email_pass = st.sidebar.text_input("App Password", type="password")
 
-# We use simple days now to calculate exact date
+# Exact Time Control
 days_back = st.sidebar.number_input("Look back days:", min_value=1, value=365)
 jd = st.text_area("Job Description", height=100, placeholder="Paste JD...")
 
 # --- HELPER FUNCTIONS ---
-def decode_str(header_val):
-    if not header_val: return ""
-    decoded_list = decode_header(header_val)
-    text = ""
-    for t, encoding in decoded_list:
-        if isinstance(t, bytes):
-            text += t.decode(encoding if encoding else "utf-8", errors="ignore")
-        else:
-            text += str(t)
-    return text
-
 def get_file_content(file_bytes, filename):
     try:
         if filename.lower().endswith(".pdf"):
@@ -50,63 +39,68 @@ def get_file_content(file_bytes, filename):
         return ""
     return ""
 
-# --- THE BRUTE FORCE ENGINE ---
-def run_deep_scan(user, password, days):
+def decode_fname(header_val):
+    if not header_val: return ""
+    decoded_list = decode_header(header_val)
+    filename = ""
+    for text, encoding in decoded_list:
+        if isinstance(text, bytes):
+            filename += text.decode(encoding if encoding else "utf-8", errors="ignore")
+        else:
+            filename += text
+    return filename
+
+# --- THE GOD MODE ENGINE ---
+def run_god_mode_scan(user, password, days):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try:
         mail.login(user, password)
     except Exception as e:
-        return [], [], f"Login Failed: {e}"
+        return [], f"Login Failed: {e}"
 
     mail.select("INBOX")
 
-    # 1. CALCULATE EXACT DATE (Format: 01-Jan-2024)
-    since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
+    # 1. CALCULATE DATE (YYYY/MM/DD)
+    date_str = (datetime.now() - timedelta(days=days)).strftime("%Y/%m/%d")
     
-    # 2. STANDARD IMAP SEARCH (No Google "Magic")
-    # We search for ALL emails since date, then filter manually.
-    st.toast(f"Requesting all emails since {since_date}...", icon="📡")
-    typ, data = mail.search(None, f'(SINCE "{since_date}")')
+    # 2. THE GOD QUERY
+    # We tell Google: "Only give me emails with PDF or DOCX files sent after this date"
+    # This filters 35,000 emails down to 46 INSTANTLY.
+    search_cmd = f'(X-GM-RAW "filename:pdf OR filename:docx after:{date_str}")'
+    
+    st.toast(f"Asking Google for PDFs/DOCXs since {date_str}...", icon="📡")
+    typ, data = mail.search(None, search_cmd)
     
     if not data[0]:
         mail.logout()
-        return [], [], "No emails found in this date range."
+        return [], "No resumes found with this specific filter."
 
     email_ids = data[0].split()
-    total_emails = len(email_ids)
+    total_found = len(email_ids)
+    
+    st.info(f"⚡ Google identified {total_found} emails with resumes. Downloading now...")
     
     resumes = []
-    debug_log = []
-    
     progress_bar = st.progress(0)
-    status_text = st.empty()
     
-    # 3. ITERATE EVERYTHING (No [-50:] limit)
-    # This might take a moment if you have thousands of emails, but it GUARANTEES accuracy.
+    # 3. DOWNLOAD ONLY THE HITS
     for idx, num in enumerate(reversed(email_ids)):
-        progress_bar.progress((idx + 1) / total_emails)
-        status_text.write(f"Scanning email {idx+1}/{total_emails}...")
+        progress_bar.progress((idx + 1) / total_found)
         
         _, msg_data = mail.fetch(num, "(RFC822)")
         for response_part in msg_data:
             if isinstance(response_part, tuple):
                 msg = email.message_from_bytes(response_part[1])
-                subject = decode_str(msg["Subject"])
                 sender = msg["From"]
                 
-                # Check for attachments
                 if msg.is_multipart():
-                    has_resume = False
                     for part in msg.walk():
-                        # robust check for attachment
-                        content_disposition = str(part.get("Content-Disposition"))
-                        
-                        if "attachment" in content_disposition:
+                        if "attachment" in part.get("Content-Disposition", ""):
                             fname = part.get_filename()
                             if fname:
-                                filename = decode_str(fname)
+                                filename = decode_fname(fname)
                                 
-                                # STRICT MATCH
+                                # Double Check (Speed Optimization)
                                 if filename.lower().endswith(('.pdf', '.docx')):
                                     file_bytes = part.get_payload(decode=True)
                                     content = get_file_content(file_bytes, filename)
@@ -114,38 +108,23 @@ def run_deep_scan(user, password, days):
                                     if len(content) > 10:
                                         resumes.append({
                                             "Candidate": sender,
-                                            "Subject": subject,
                                             "File": filename,
                                             "text": content
                                         })
-                                        has_resume = True
-                                        debug_log.append(f"✅ FOUND: {filename} in '{subject}'")
-                                else:
-                                    debug_log.append(f"⚠️ SKIPPED: {filename} (Wrong Type)")
-                        
-                    if not has_resume:
-                         debug_log.append(f"❌ NO ATTACHMENT: Email '{subject}' had no PDF/DOCX")
-                else:
-                    debug_log.append(f"❌ TEXT ONLY: Email '{subject}' is not multipart")
-
+    
     mail.logout()
-    status_text.empty()
-    return resumes, debug_log, "Success"
+    return resumes, "Success"
 
 # --- UI EXECUTION ---
-if st.button("🚀 START DEEP SCAN"):
+if st.button("🚀 RUN GOD MODE SCAN"):
     if not email_user or not email_pass:
         st.error("Credentials required.")
     else:
-        # Clear previous results
-        resumes = []
-        debug_log = []
-        
-        with st.spinner("Mining Inbox... (This extracts everything)"):
-            resumes, debug_log, status = run_deep_scan(email_user, email_pass, days_back)
+        with st.spinner("Connecting..."):
+            resumes, status = run_god_mode_scan(email_user, email_pass, days_back)
             
             if resumes:
-                st.success(f"Found {len(resumes)} Valid Resumes")
+                st.success(f"✅ Successfully extracted {len(resumes)} Resumes")
                 
                 # RANKING
                 if jd:
@@ -156,16 +135,12 @@ if st.button("🚀 START DEEP SCAN"):
                     
                     for i, r in enumerate(resumes):
                         r["Match %"] = int(round(cosine_sim[0][i] * 100))
-                        r["Status"] = "Interview" if r["Match %"] > 40 else "Reject"
-                        del r["text"] # Clean table
+                        r["Status"] = "Interview" if r["Match %"] > 45 else "Reject"
+                        del r["text"]
                     
                     df = pd.DataFrame(resumes).sort_values(by="Match %", ascending=False)
                     st.dataframe(df, use_container_width=True)
                 else:
                     st.dataframe(pd.DataFrame(resumes))
             else:
-                st.error("Still 0? Check the Debug Log below.")
-
-            # FULL TRANSPARENCY LOG
-            with st.expander("🕵️ Detailed Scan Log (See exactly what was skipped)", expanded=False):
-                st.write(debug_log)
+                st.warning(status)
