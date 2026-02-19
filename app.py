@@ -139,7 +139,6 @@ def run_gmail_scan(user, password, days, jd_text):
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE ---
-# Notice we now pass the LIVE account object, instead of creating a new one
 def run_outlook_scan(account_obj, days, jd_text):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
@@ -186,8 +185,6 @@ outlook_account = None
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         
-        # --- THE ULTIMATE MEMORY LOCK ---
-        # We lock the entire Account object into memory so it survives button clicks
         if "o365_account" not in st.session_state:
             st.session_state.o365_account = Account((client_id, client_secret))
             
@@ -200,6 +197,9 @@ if provider == "Outlook / Office 365 (Corporate)":
                 url, state = outlook_account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
                 st.session_state.o365_auth_url = url
                 st.session_state.o365_state = state
+                
+                # --- SURGICAL FIX: Manually extract and lock the hidden dictionary ---
+                st.session_state.o365_auth_flow = outlook_account.con.auth_flow
             
             st.warning("⚠️ Outlook Authentication Required")
             st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_url})", unsafe_allow_html=True)
@@ -210,7 +210,9 @@ if provider == "Outlook / Office 365 (Corporate)":
                 
                 if submitted and result_url:
                     try:
-                        # We use the EXACT same account object that generated the link
+                        # --- SURGICAL FIX: Forcefully inject the hidden dictionary back into the object ---
+                        outlook_account.con.auth_flow = st.session_state.o365_auth_flow
+                        
                         result = outlook_account.con.request_token(result_url, state=st.session_state.o365_state, redirect_uri='http://localhost:8501')
                         if result:
                             st.success("✅ Success! You can now scan your inbox.")
@@ -232,7 +234,6 @@ if is_ready_to_scan:
         
         elif provider == "Outlook / Office 365 (Corporate)":
             with st.spinner("Mining Outlook Resumes..."):
-                # Pass the live, authenticated account object directly
                 candidates, status = run_outlook_scan(outlook_account, days_back, jd)
 
 # 3. DISPLAY RESULTS
@@ -252,21 +253,3 @@ if candidates:
         candidates.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
     for c in candidates:
-        with st.container():
-            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-            with c1:
-                st.metric("Score", f"{c.get('Match %', 0)}%")
-            with c2:
-                st.subheader(c['Name'])
-                st.caption(f"{c['Email']}")
-                st.caption(f"📞 {c['Phone']}")
-            with c3:
-                st.write(f"**Skills:** {c['Skills']}")
-                st.write(f"**Exp:** {c['Experience']}")
-            with c4:
-                st.write("#")
-                st.download_button("📥 Download", data=c['Bytes'], file_name=c['Filename'], mime="application/octet-stream", key=f"dl_{c['Filename']}")
-            st.divider()
-
-elif status and status != "Success" and status != "Waiting...":
-    st.warning(status)
