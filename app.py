@@ -144,7 +144,7 @@ def run_gmail_scan(user, password, days, jd_text):
                                 if filename.lower().endswith(('.pdf', '.docx')):
                                     content = read_file_content(part.get_payload(decode=True), filename)
                                     if len(content) > 20:
-                                        meta = extract_details(content, jd_text)
+                                       meta = extract_details(content, jd_text, openai_api_key)
                                         candidates.append({
                                             "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
                                             "Email": meta["Email"],
@@ -205,7 +205,7 @@ def run_outlook_scan(account_obj, days, jd_text):
                             log += f" ❌ CRASHED: {content}"
                         elif len(content) > 5:
                             log += f" ✅ Parsed! ({len(content)} chars)"
-                            meta = extract_details(content, jd_text)
+                            meta = extract_details(content, jd_text, openai_api_key)
                             candidates.append({
                                 "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
                                 "Email": meta["Email"],
@@ -376,6 +376,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
 
 
