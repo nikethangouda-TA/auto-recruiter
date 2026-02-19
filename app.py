@@ -138,7 +138,6 @@ def run_gmail_scan(user, password, days, jd_text):
                                         })
     mail.logout()
     return candidates, "Success"
-
 # --- OUTLOOK ENGINE ---
 def run_outlook_scan(account_obj, days, jd_text):
     if not account_obj.is_authenticated:
@@ -147,35 +146,45 @@ def run_outlook_scan(account_obj, days, jd_text):
     mailbox = account_obj.mailbox()
     since_date = datetime.now() - timedelta(days=days)
     
-    # FIX 1: Use .q() instead of .new_query() and use Microsoft's camelCase properties
-    query = mailbox.q().on_attribute('hasAttachments').equals(True).chain('and').on_attribute('receivedDateTime').greater_equal(since_date)
-    
-    messages = mailbox.get_messages(limit=250, query=query)
+    # Bulletproof bypass: Fetch metadata directly, no fragile query builders!
+    messages = mailbox.get_messages(limit=15000) 
     
     candidates = []
-    msg_list = list(messages)
-    if not msg_list: return [], "No emails found in the given timeframe."
-
-    bar = st.progress(0)
-    for idx, msg in enumerate(msg_list):
-        bar.progress((idx + 1) / len(msg_list))
+    processed = 0
+    status_text = st.empty()
+    
+    for msg in messages:
+        processed += 1
         
-        # FIX 2: Tell Outlook to explicitly download the attachments to memory
+        # Update UI occasionally so you know it's working
+        if processed % 50 == 0:
+            status_text.write(f"Scanning email timeline: Processed {processed}...")
+        
+        # 1. DATE CHECK
+        msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
+        if msg_date:
+            msg_date = msg_date.replace(tzinfo=None)
+            if msg_date < since_date:
+                break # Reached the timeframe limit! Stop downloading.
+                
+        # 2. ATTACHMENT CHECK
         if getattr(msg, 'has_attachments', False):
-            msg.attachments.get_attachments() 
-            
+            try:
+                msg.attachments.get_attachments()
+            except Exception:
+                pass 
+                
             for att in msg.attachments:
                 if att.name and att.name.lower().endswith(('.pdf', '.docx')):
-                    file_bytes = att.content 
+                    file_bytes = getattr(att, 'content', None)
                     
                     if file_bytes:
-                        # Ensure the file data is in bytes format for the PDF Reader
                         if isinstance(file_bytes, str):
                             file_bytes = file_bytes.encode('utf-8', errors='ignore')
                             
                         content = read_file_content(file_bytes, att.name)
                         
-                        if len(content) > 20:
+                        if len(content) > 20: 
                             meta = extract_details(content, jd_text)
                             candidates.append({
                                 "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
@@ -187,6 +196,8 @@ def run_outlook_scan(account_obj, days, jd_text):
                                 "Bytes": file_bytes,
                                 "text": content
                             })
+                            
+    status_text.empty()
     return candidates, "Success"
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
@@ -301,4 +312,5 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
 
