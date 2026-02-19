@@ -159,76 +159,53 @@ def run_gmail_scan(user, password, days, jd_text):
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE (DEBUG MODE) ---
-def run_outlook_scan(account_obj, days, jd_text):
-    if not account_obj.is_authenticated:
-        return [], "Please authenticate with Outlook first."
-        
-    inbox = account_obj.mailbox().inbox_folder()
-    
-    # We will only pull the last 50 emails so the debug logs don't crash your browser
-    messages = inbox.get_messages(limit=50) 
-    
+def run_outlook_scan(account, days_back, jd_text):
     candidates = []
-    debug_logs = []
-    
-    for msg in messages:
-        subject = getattr(msg, 'subject', 'No Subject')
-        log = f"📧 {subject[:30]}..."
+    status = "Success"
+    try:
+        mailbox = account.mailbox()
+        inbox = mailbox.inbox_folder()
         
-        if getattr(msg, 'has_attachments', False):
-            log += " | 📎 Has Attachments"
-            try:
-                # Force attachment download
-                if hasattr(msg.attachments, 'download_attachments'):
-                    msg.attachments.download_attachments()
-            except Exception as e:
-                log += f" [Error downloading info: {e}]"
-                
+        # Calculate date filter
+        after_date = datetime.now() - timedelta(days=days_back)
+        query = inbox.new_query().on_attribute('received_datetime').greater_equal(after_date)
+        
+        messages = inbox.get_messages(limit=100, query=query, download_attachments=True)
+
+        for msg in messages:
             for att in msg.attachments:
-                if att.name and att.name.lower().endswith(('.pdf', '.docx')):
-                    log += f" | 📄 {att.name}"
-                    file_bytes = getattr(att, 'content', None)
-                    
-                    if file_bytes:
-                        # Base64 Decryption check
-                        if isinstance(file_bytes, str):
-                            try:
-                                file_bytes = base64.b64decode(file_bytes)
-                                log += " (Base64 Decoded)"
-                            except:
-                                file_bytes = file_bytes.encode('utf-8', errors='ignore')
-                                log += " (UTF-8 Encoded)"
-                                
-                        content = read_file_content(file_bytes, att.name)
+                if att.name.lower().endswith(('.pdf', '.docx')):
+                    content = ""
+                    if att.name.lower().endswith('.pdf'):
+                        try:
+                            pdf_reader = PdfReader(io.BytesIO(att.content))
+                            content = " ".join([page.extract_text() for page in pdf_reader.pages])
+                        except: continue
+                    elif att.name.lower().endswith('.docx'):
+                        try:
+                            doc = docx.Document(io.BytesIO(att.content))
+                            content = " ".join([p.text for p in doc.paragraphs])
+                        except: continue
+
+                    if content:
+                        # This line uses the new AI Brain!
+                        meta = extract_details(content, jd_text, openai_api_key)
                         
-                        if "DEBUG_ERROR" in content:
-                            log += f" ❌ CRASHED: {content}"
-                        elif len(content) > 5:
-                            log += f" ✅ Parsed! ({len(content)} chars)"
-                            meta = extract_details(content, jd_text, openai_api_key)
-                            candidates.append({
-                                "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
-                                "Email": meta["Email"],
-                                "Phone": meta["Phone"],
-                                "Experience": meta["Experience"],
-                                "Skills": meta["Skills Match"],
-                                "Filename": att.name,
-                                "Bytes": file_bytes,
-                                "text": content
-                            })
-                        else:
-                            log += " ⚠️ File read but text was completely empty."
-                    else:
-                        log += " ⚠️ File found, but Microsoft returned 0 bytes of content."
-        else:
-            log += " | No attachments."
-            
-        debug_logs.append(log)
-                            
-    if len(candidates) == 0:
-        return [], "DEBUG REPORT:\n\n" + "\n".join(debug_logs)
-        
-    return candidates, "Success"
+                        candidates.append({
+                            "Name": meta["Name"],
+                            "Email": meta["Email"],
+                            "Phone": meta["Phone"],
+                            "Experience": meta["Experience"],
+                            "Skills": meta.get("Skills", "N/A"),
+                            "Match %": meta.get("Match %", 0),
+                            "text": content,
+                            "Filename": att.name,
+                            "Bytes": att.content
+                        })
+    except Exception as e:
+        status = f"Error: {str(e)}"
+    
+    return candidates, status
 
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
@@ -312,5 +289,6 @@ if is_ready_to_scan:
                 c["Match %"] = int(round(cosine_sim[0][i] * 100))
         except Exception: 
             pass
+
 
 
