@@ -10,6 +10,7 @@ import docx
 import io
 import re
 from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qsl
 from O365 import Account
 
 # --- PAGE CONFIG ---
@@ -181,7 +182,7 @@ status = ""
 is_ready_to_scan = True
 outlook_account = None
 
-# 1. OUTLOOK AUTHENTICATION GATE
+# 1. OUTLOOK AUTHENTICATION GATE (THE BYPASS)
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         
@@ -193,16 +194,17 @@ if provider == "Outlook / Office 365 (Corporate)":
         if not outlook_account.is_authenticated:
             is_ready_to_scan = False
             
-            if "o365_auth_url" not in st.session_state:
-                url, state = outlook_account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
-                st.session_state.o365_auth_url = url
-                st.session_state.o365_state = state
-                
-                # --- SURGICAL FIX: Manually extract and lock the hidden dictionary ---
-                st.session_state.o365_auth_flow = outlook_account.con.auth_flow
+            if "o365_auth_flow" not in st.session_state:
+                # We bypass the fragile O365 wrapper entirely and use pure MSAL
+                scopes = ['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read']
+                flow = outlook_account.con.msal_client.initiate_auth_code_flow(
+                    scopes=scopes, 
+                    redirect_uri='http://localhost:8501'
+                )
+                st.session_state.o365_auth_flow = flow
             
             st.warning("⚠️ Outlook Authentication Required")
-            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_url})", unsafe_allow_html=True)
+            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_flow['auth_uri']})", unsafe_allow_html=True)
             
             with st.form("auth_form"):
                 result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
@@ -210,15 +212,23 @@ if provider == "Outlook / Office 365 (Corporate)":
                 
                 if submitted and result_url:
                     try:
-                        # --- SURGICAL FIX: Forcefully inject the hidden dictionary back into the object ---
-                        outlook_account.con.auth_flow = st.session_state.o365_auth_flow
+                        # Extract the data from your pasted URL
+                        query_params = dict(parse_qsl(urlparse(result_url).query))
                         
-                        result = outlook_account.con.request_token(result_url, state=st.session_state.o365_state, redirect_uri='http://localhost:8501')
-                        if result:
+                        # Feed the URL data and the pure MSAL memory flow back into MSAL
+                        result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(
+                            auth_code_flow=st.session_state.o365_auth_flow,
+                            auth_response=query_params
+                        )
+                        
+                        if "access_token" in result:
+                            # BOOM: Backdoor the successfully verified token into O365's memory
+                            outlook_account.con.token_backend.token = result
+                            outlook_account.con.token_backend.save_token()
                             st.success("✅ Success! You can now scan your inbox.")
                             st.rerun() 
                         else:
-                            st.error("Verification failed. Please try again.")
+                            st.error(f"Verification failed: {result.get('error_description', result)}")
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -249,7 +259,7 @@ if candidates:
             cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
             for i, c in enumerate(candidates):
                 c["Match %"] = int(round(cosine_sim[0][i] * 100))
-        except Exception:
+        except Exception: 
             pass
             
         candidates.sort(key=lambda x: x.get("Match %", 0), reverse=True)
@@ -279,5 +289,3 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
-
-
