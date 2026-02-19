@@ -182,29 +182,34 @@ candidates = []
 status = ""
 is_ready_to_scan = True
 
-# 1. OUTLOOK AUTHENTICATION GATE (Happens before the Start Button)
+# 1. OUTLOOK AUTHENTICATION GATE
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         account = Account((client_id, client_secret))
         if not account.is_authenticated:
             is_ready_to_scan = False
             
-            # Generate Link
-            url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
-            st.warning("⚠️ Outlook Authentication Required")
-            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({url})", unsafe_allow_html=True)
+            # --- THE MEMORY FIX ---
+            # Generate the URL ONCE and save the secret "state" into Streamlit's memory
+            if "o365_auth_url" not in st.session_state:
+                url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
+                st.session_state.o365_auth_url = url
+                st.session_state.o365_state = state
             
-            # Form to safely capture the URL without refreshing early
+            st.warning("⚠️ Outlook Authentication Required")
+            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_url})", unsafe_allow_html=True)
+            
             with st.form("auth_form"):
                 result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
                 submitted = st.form_submit_button("Verify Connection")
                 
                 if submitted and result_url:
                     try:
-                        result = account.con.request_token(result_url, state=state, redirect_uri='http://localhost:8501')
+                        # Pull the secret "state" back out of memory to verify the URL
+                        result = account.con.request_token(result_url, state=st.session_state.o365_state, redirect_uri='http://localhost:8501')
                         if result:
                             st.success("✅ Success! You can now scan your inbox.")
-                            st.rerun() # Refresh to show the Start button
+                            st.rerun() 
                         else:
                             st.error("Verification failed. Please try again.")
                     except Exception as e:
