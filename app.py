@@ -147,7 +147,9 @@ def run_outlook_scan(account_obj, days, jd_text):
     mailbox = account_obj.mailbox()
     since_date = datetime.now() - timedelta(days=days)
     
-    query = mailbox.new_query().on_attribute('has_attachments').equals(True).chain('and').on_attribute('received_date_time').greater_equal(since_date)
+    # FIX 1: Use .q() instead of .new_query() and use Microsoft's camelCase properties
+    query = mailbox.q().on_attribute('hasAttachments').equals(True).chain('and').on_attribute('receivedDateTime').greater_equal(since_date)
+    
     messages = mailbox.get_messages(limit=250, query=query)
     
     candidates = []
@@ -157,25 +159,35 @@ def run_outlook_scan(account_obj, days, jd_text):
     bar = st.progress(0)
     for idx, msg in enumerate(msg_list):
         bar.progress((idx + 1) / len(msg_list))
-        for att in msg.attachments:
-            if att.name.lower().endswith(('.pdf', '.docx')):
-                file_bytes = att.content
-                content = read_file_content(file_bytes, att.name)
-                
-                if len(content) > 20:
-                    meta = extract_details(content, jd_text)
-                    candidates.append({
-                        "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
-                        "Email": meta["Email"],
-                        "Phone": meta["Phone"],
-                        "Experience": meta["Experience"],
-                        "Skills": meta["Skills Match"],
-                        "Filename": att.name,
-                        "Bytes": file_bytes,
-                        "text": content
-                    })
+        
+        # FIX 2: Tell Outlook to explicitly download the attachments to memory
+        if getattr(msg, 'has_attachments', False):
+            msg.attachments.get_attachments() 
+            
+            for att in msg.attachments:
+                if att.name and att.name.lower().endswith(('.pdf', '.docx')):
+                    file_bytes = att.content 
+                    
+                    if file_bytes:
+                        # Ensure the file data is in bytes format for the PDF Reader
+                        if isinstance(file_bytes, str):
+                            file_bytes = file_bytes.encode('utf-8', errors='ignore')
+                            
+                        content = read_file_content(file_bytes, att.name)
+                        
+                        if len(content) > 20:
+                            meta = extract_details(content, jd_text)
+                            candidates.append({
+                                "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
+                                "Email": meta["Email"],
+                                "Phone": meta["Phone"],
+                                "Experience": meta["Experience"],
+                                "Skills": meta["Skills Match"],
+                                "Filename": att.name,
+                                "Bytes": file_bytes,
+                                "text": content
+                            })
     return candidates, "Success"
-
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
 status = ""
@@ -289,3 +301,4 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
