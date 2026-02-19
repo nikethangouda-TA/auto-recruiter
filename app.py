@@ -139,15 +139,14 @@ def run_gmail_scan(user, password, days, jd_text):
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE ---
-def run_outlook_scan(client_id, client_secret, days, jd_text):
-    account = Account((client_id, client_secret))
-    if not account.is_authenticated:
+# Notice we now pass the LIVE account object, instead of creating a new one
+def run_outlook_scan(account_obj, days, jd_text):
+    if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
-    mailbox = account.mailbox()
+    mailbox = account_obj.mailbox()
     since_date = datetime.now() - timedelta(days=days)
     
-    # Fast filtering for Outlook
     query = mailbox.new_query().on_attribute('has_attachments').equals(True).chain('and').on_attribute('received_date_time').greater_equal(since_date)
     messages = mailbox.get_messages(limit=250, query=query)
     
@@ -181,18 +180,24 @@ def run_outlook_scan(client_id, client_secret, days, jd_text):
 candidates = []
 status = ""
 is_ready_to_scan = True
+outlook_account = None
 
 # 1. OUTLOOK AUTHENTICATION GATE
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
-        account = Account((client_id, client_secret))
-        if not account.is_authenticated:
+        
+        # --- THE ULTIMATE MEMORY LOCK ---
+        # We lock the entire Account object into memory so it survives button clicks
+        if "o365_account" not in st.session_state:
+            st.session_state.o365_account = Account((client_id, client_secret))
+            
+        outlook_account = st.session_state.o365_account
+        
+        if not outlook_account.is_authenticated:
             is_ready_to_scan = False
             
-            # --- THE MEMORY FIX ---
-            # Generate the URL ONCE and save the secret "state" into Streamlit's memory
             if "o365_auth_url" not in st.session_state:
-                url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
+                url, state = outlook_account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
                 st.session_state.o365_auth_url = url
                 st.session_state.o365_state = state
             
@@ -205,8 +210,8 @@ if provider == "Outlook / Office 365 (Corporate)":
                 
                 if submitted and result_url:
                     try:
-                        # Pull the secret "state" back out of memory to verify the URL
-                        result = account.con.request_token(result_url, state=st.session_state.o365_state, redirect_uri='http://localhost:8501')
+                        # We use the EXACT same account object that generated the link
+                        result = outlook_account.con.request_token(result_url, state=st.session_state.o365_state, redirect_uri='http://localhost:8501')
                         if result:
                             st.success("✅ Success! You can now scan your inbox.")
                             st.rerun() 
@@ -227,7 +232,8 @@ if is_ready_to_scan:
         
         elif provider == "Outlook / Office 365 (Corporate)":
             with st.spinner("Mining Outlook Resumes..."):
-                candidates, status = run_outlook_scan(client_id, client_secret, days_back, jd)
+                # Pass the live, authenticated account object directly
+                candidates, status = run_outlook_scan(outlook_account, days_back, jd)
 
 # 3. DISPLAY RESULTS
 if candidates:
