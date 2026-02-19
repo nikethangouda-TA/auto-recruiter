@@ -45,8 +45,48 @@ with st.sidebar:
     openai_api_key = st.text_input("OpenAI API Key (Required for high accuracy):", type="password", placeholder="sk-proj-...")
 
 # --- SHARED HELPERS ---
-def extract_details(text, jd_text):
-    details = {"Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills Match": []}
+def extract_details(text, jd_text, api_key=None):
+    # --- SMART LLM EXTRACTION ---
+    if api_key:
+        try:
+            client = OpenAI(api_key=api_key)
+            prompt = f"""
+            You are an expert IT Recruiter. Extract candidate details from the following resume text.
+            
+            Job Description: {jd_text if jd_text else 'None provided.'}
+            
+            Resume Text: {text[:6000]} 
+            
+            Respond STRICTLY with a valid JSON object containing exactly these keys:
+            "Name": (String, candidate's full name, or "N/A"),
+            "Email": (String, or "N/A"),
+            "Phone": (String, or "N/A"),
+            "Experience": (String, calculate total years of relevant experience, e.g., "7 Years", or "N/A"),
+            "Skills": (String, comma-separated list of the top 5-7 skills matching the JD. "N/A" if no JD),
+            "Match": (Integer, 0 to 100 score of how well the candidate fits the Job Description. Return 0 if no JD provided).
+            """
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={ "type": "json_object" } 
+            )
+            
+            data = json.loads(response.choices[0].message.content)
+            
+            return {
+                "Name": data.get("Name", "N/A"),
+                "Email": data.get("Email", "N/A"),
+                "Phone": data.get("Phone", "N/A"),
+                "Experience": str(data.get("Experience", "N/A")),
+                "Skills": str(data.get("Skills", "N/A")),
+                "Match %": int(data.get("Match", 0)) 
+            }
+        except Exception:
+            pass # If API fails, silently fall back to the old method below
+
+    # --- DUMB REGEX FALLBACK (Runs if no API key is provided or API fails) ---
+    details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
     
     phone_pattern = r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]'
     phones = re.findall(phone_pattern, text)
@@ -56,7 +96,9 @@ def extract_details(text, jd_text):
 
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     emails = re.findall(email_pattern, text)
-    if emails: details["Email"] = emails[0]
+    if emails: 
+        details["Email"] = emails[0]
+        details["Name"] = emails[0].split('@')[0]
 
     exp_pattern = r'(\d+)\+?\s*years?'
     exps = re.findall(exp_pattern, text.lower())
@@ -64,39 +106,9 @@ def extract_details(text, jd_text):
         try:
             years = [int(x) for x in exps]
             details["Experience"] = f"{max(years)} Years"
-        except: pass
-
-    if jd_text:
-        jd_words = set(re.findall(r'\b\w+\b', jd_text.lower()))
-        stop_words = {'and', 'the', 'to', 'in', 'of', 'a', 'for', 'with', 'on', 'is', 'required', 'years', 'skills'}
-        keywords = jd_words - stop_words
-        found_skills = [word for word in keywords if word in text.lower()]
-        details["Skills Match"] = ", ".join(list(set(found_skills))[:7])
+        except Exception: pass
 
     return details
-
-def read_file_content(file_bytes, filename):
-    try:
-        if filename.lower().endswith(".pdf"):
-            pdf = PdfReader(io.BytesIO(file_bytes))
-            text = ""
-            for page in pdf.pages: text += page.extract_text() + " "
-            return text
-        elif filename.lower().endswith(".docx"):
-            doc = docx.Document(io.BytesIO(file_bytes))
-            return "\n".join([para.text for para in doc.paragraphs])
-    except Exception as e: 
-        return f"DEBUG_ERROR: {str(e)}"
-    return ""
-
-def decode_fname(header_val):
-    if not header_val: return ""
-    decoded_list = decode_header(header_val)
-    filename = ""
-    for text, encoding in decoded_list:
-        if isinstance(text, bytes): filename += text.decode(encoding if encoding else "utf-8", errors="ignore")
-        else: filename += text
-    return filename
 
 # --- GMAIL ENGINE ---
 def run_gmail_scan(user, password, days, jd_text):
@@ -364,6 +376,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
 
 
