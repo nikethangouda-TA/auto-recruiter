@@ -282,13 +282,12 @@ if is_ready_to_scan:
                 # SAVE TO MEMORY
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
+
 # 3. DISPLAY RESULTS
 if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
     display_cands = st.session_state.scanned_candidates
     
-    st.success(f"✅ Found {len(display_cands)} Candidates")
-    st.divider()
-    
+    # --- DUMB AI FALLBACK SCORING ---
     if jd:
         documents = [jd] + [c['text'] for c in display_cands]
         vectorizer = TfidfVectorizer(stop_words='english')
@@ -301,6 +300,33 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
             pass
             
     display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
+
+    # --- TOP BAR: Stats & Excel Export ---
+    top_col1, top_col2 = st.columns([3, 1])
+    with top_col1:
+        st.success(f"✅ Found {len(display_cands)} Candidates")
+    with top_col2:
+        # Build the DataFrame for Excel/CSV export
+        export_df = pd.DataFrame([{
+            "Score (%)": c.get('Match %', 0),
+            "Name": c.get('Name', 'N/A'),
+            "Phone": c.get('Phone', 'N/A'),
+            "Email": c.get('Email', 'N/A'),
+            "Experience": c.get('Experience', 'N/A'),
+            "Skills": c.get('Skills', 'N/A')
+        } for c in display_cands])
+        
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        
+        st.download_button(
+            label="📊 Download to Excel",
+            data=csv_data,
+            file_name=f"candidates_export_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+    st.divider()
 
     # --- THE TABLE UI ---
     h1, h2, h3, h4, h5, h6, h7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
@@ -333,4 +359,5 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
