@@ -237,6 +237,7 @@ if is_ready_to_scan:
                 candidates, status = run_outlook_scan(outlook_account, days_back, jd)
 
 # 3. DISPLAY RESULTS
+# 3. DISPLAY RESULTS
 if candidates:
     st.success(f"✅ Found {len(candidates)} Candidates")
     st.divider()
@@ -249,7 +250,34 @@ if candidates:
             cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
             for i, c in enumerate(candidates):
                 c["Match %"] = int(round(cosine_sim[0][i] * 100))
-        except: pass
+        except Exception:
+            pass
+            
         candidates.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
     for c in candidates:
+        with st.container():
+            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+            with c1:
+                st.metric("Score", f"{c.get('Match %', 0)}%")
+            with c2:
+                st.subheader(c['Name'])
+                st.caption(f"{c['Email']}")
+                st.caption(f"📞 {c['Phone']}")
+            with c3:
+                st.write(f"**Skills:** {c['Skills']}")
+                st.write(f"**Exp:** {c['Experience']}")
+            with c4:
+                st.write("#")
+                st.download_button(
+                    "📥 Download", 
+                    data=c['Bytes'], 
+                    file_name=c['Filename'], 
+                    mime="application/octet-stream", 
+                    key=f"dl_{c['Filename']}"
+                )
+            st.divider()
+
+elif status and status != "Success" and status != "Waiting...":
+    st.warning(status)
+
