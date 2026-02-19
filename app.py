@@ -263,7 +263,6 @@ if provider == "Outlook / Office 365 (Corporate)":
                             st.error(f"Verification failed: {result.get('error_description', result)}")
                     except Exception as e:
                         st.error(f"Error: {e}")
-
 # 2. RUN THE ENGINE
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
@@ -272,31 +271,39 @@ if is_ready_to_scan:
                 st.error("Credentials required.")
             else:
                 with st.spinner("Connecting to Gmail..."):
-                    candidates, status = run_gmail_scan(email_user, email_pass, days_back, jd)
+                    cands, stat = run_gmail_scan(email_user, email_pass, days_back, jd)
+                    # SAVE TO MEMORY
+                    st.session_state.scanned_candidates = cands
+                    st.session_state.scan_status = stat
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner("Running X-Ray Outlook Scan..."):
-                candidates, status = run_outlook_scan(outlook_account, days_back, jd)
+            with st.spinner("Mining Outlook Resumes..."):
+                cands, stat = run_outlook_scan(outlook_account, days_back, jd)
+                # SAVE TO MEMORY
+                st.session_state.scanned_candidates = cands
+                st.session_state.scan_status = stat
 
-# 3. DISPLAY RESULTS
-if candidates:
-    st.success(f"✅ Found {len(candidates)} Candidates")
+# 3. DISPLAY RESULTS (Pull from memory!)
+if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
+    display_cands = st.session_state.scanned_candidates
+    
+    st.success(f"✅ Found {len(display_cands)} Candidates")
     st.divider()
     
     if jd:
-        documents = [jd] + [c['text'] for c in candidates]
+        documents = [jd] + [c['text'] for c in display_cands]
         vectorizer = TfidfVectorizer(stop_words='english')
         try:
             tfidf_matrix = vectorizer.fit_transform(documents)
             cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])
-            for i, c in enumerate(candidates):
+            for i, c in enumerate(display_cands):
                 c["Match %"] = int(round(cosine_sim[0][i] * 100))
         except Exception: 
             pass
             
-        candidates.sort(key=lambda x: x.get("Match %", 0), reverse=True)
+        display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
-    for c in candidates:
+    for c in display_cands:
         with st.container():
             c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
             with c1:
@@ -319,7 +326,5 @@ if candidates:
                 )
             st.divider()
 
-elif status and status != "Success" and status != "Waiting...":
-    # Print the debug logs into a code block so it looks clean
-    st.warning("⚠️ No Resumes successfully parsed. Here is what the scanner saw:")
-    st.code(status, language="text")
+elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
+    st.warning(st.session_state.scan_status)
