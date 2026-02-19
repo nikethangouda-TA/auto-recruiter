@@ -5,16 +5,3 @@ pypdf
 python-docx
 O365
 openai
-streamlit
-pandas
-scikit-learn
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-
-google-api-python-client
-pypdf
-python-docx
-O365
-pip install openai
-
