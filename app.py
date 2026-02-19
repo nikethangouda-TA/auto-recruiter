@@ -139,15 +139,17 @@ def run_gmail_scan(user, password, days, jd_text):
     mail.logout()
     return candidates, "Success"
 # --- OUTLOOK ENGINE ---
+# --- OUTLOOK ENGINE ---
 def run_outlook_scan(account_obj, days, jd_text):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
-    mailbox = account_obj.mailbox()
+    # FIX 1: Explicitly target the Inbox so we don't scan hidden system folders
+    inbox = account_obj.mailbox().inbox_folder()
     since_date = datetime.now() - timedelta(days=days)
     
-    # Bulletproof bypass: Fetch metadata directly, no fragile query builders!
-    messages = mailbox.get_messages(limit=15000) 
+    # Grab a large batch of recent emails to scan through
+    messages = inbox.get_messages(limit=2000) 
     
     candidates = []
     processed = 0
@@ -156,20 +158,21 @@ def run_outlook_scan(account_obj, days, jd_text):
     for msg in messages:
         processed += 1
         
-        # Update UI occasionally so you know it's working
-        if processed % 50 == 0:
-            status_text.write(f"Scanning email timeline: Processed {processed}...")
+        # Update UI so you can actually see it working
+        if processed % 25 == 0:
+            status_text.write(f"Scanning Inbox: Checked {processed} emails...")
         
-        # 1. DATE CHECK
+        # FIX 2: Check the date. If it's old, SKIP it (continue) instead of STOPPING (break)
         msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
         if msg_date:
             msg_date = msg_date.replace(tzinfo=None)
             if msg_date < since_date:
-                break # Reached the timeframe limit! Stop downloading.
+                continue 
                 
-        # 2. ATTACHMENT CHECK
+        # ATTACHMENT CHECK
         if getattr(msg, 'has_attachments', False):
             try:
+                # Tell Outlook to download the actual files
                 msg.attachments.get_attachments()
             except Exception:
                 pass 
@@ -199,6 +202,7 @@ def run_outlook_scan(account_obj, days, jd_text):
                             
     status_text.empty()
     return candidates, "Success"
+
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
 status = ""
@@ -312,5 +316,6 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
 
 
