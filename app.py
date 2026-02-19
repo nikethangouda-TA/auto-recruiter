@@ -9,6 +9,7 @@ from pypdf import PdfReader
 import docx
 import io
 import re
+import base64
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qsl
 from O365 import Account
@@ -79,7 +80,8 @@ def read_file_content(file_bytes, filename):
         elif filename.lower().endswith(".docx"):
             doc = docx.Document(io.BytesIO(file_bytes))
             return "\n".join([para.text for para in doc.paragraphs])
-    except: return ""
+    except Exception as e: 
+        return f"DEBUG_ERROR: {str(e)}"
     return ""
 
 def decode_fname(header_val):
@@ -138,53 +140,54 @@ def run_gmail_scan(user, password, days, jd_text):
                                         })
     mail.logout()
     return candidates, "Success"
-# --- OUTLOOK ENGINE ---
-# --- OUTLOOK ENGINE ---
+
+# --- OUTLOOK ENGINE (DEBUG MODE) ---
 def run_outlook_scan(account_obj, days, jd_text):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
     inbox = account_obj.mailbox().inbox_folder()
-    since_date = datetime.now() - timedelta(days=days)
     
-    messages = inbox.get_messages(limit=2000) 
+    # We will only pull the last 50 emails so the debug logs don't crash your browser
+    messages = inbox.get_messages(limit=50) 
     
     candidates = []
-    processed = 0
-    status_text = st.empty()
+    debug_logs = []
     
     for msg in messages:
-        processed += 1
+        subject = getattr(msg, 'subject', 'No Subject')
+        log = f"📧 {subject[:30]}..."
         
-        if processed % 25 == 0:
-            status_text.write(f"Scanning Inbox: Checked {processed} emails...")
-        
-        msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
-        if msg_date:
-            msg_date = msg_date.replace(tzinfo=None)
-            if msg_date < since_date:
-                continue 
-                
-        # ATTACHMENT CHECK
         if getattr(msg, 'has_attachments', False):
+            log += " | 📎 Has Attachments"
             try:
-                # 🚨 FIX: The official O365 command to pull file data into memory
-                msg.attachments.download_attachments()
-            except Exception:
-                pass 
+                # Force attachment download
+                if hasattr(msg.attachments, 'download_attachments'):
+                    msg.attachments.download_attachments()
+            except Exception as e:
+                log += f" [Error downloading info: {e}]"
                 
             for att in msg.attachments:
                 if att.name and att.name.lower().endswith(('.pdf', '.docx')):
+                    log += f" | 📄 {att.name}"
                     file_bytes = getattr(att, 'content', None)
                     
                     if file_bytes:
+                        # Base64 Decryption check
                         if isinstance(file_bytes, str):
-                            file_bytes = file_bytes.encode('utf-8', errors='ignore')
-                            
+                            try:
+                                file_bytes = base64.b64decode(file_bytes)
+                                log += " (Base64 Decoded)"
+                            except:
+                                file_bytes = file_bytes.encode('utf-8', errors='ignore')
+                                log += " (UTF-8 Encoded)"
+                                
                         content = read_file_content(file_bytes, att.name)
                         
-                        # Lowered character limit just in case it's a short resume
-                        if len(content) > 5: 
+                        if "DEBUG_ERROR" in content:
+                            log += f" ❌ CRASHED: {content}"
+                        elif len(content) > 5:
+                            log += f" ✅ Parsed! ({len(content)} chars)"
                             meta = extract_details(content, jd_text)
                             candidates.append({
                                 "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
@@ -196,21 +199,27 @@ def run_outlook_scan(account_obj, days, jd_text):
                                 "Bytes": file_bytes,
                                 "text": content
                             })
+                        else:
+                            log += " ⚠️ File read but text was completely empty."
+                    else:
+                        log += " ⚠️ File found, but Microsoft returned 0 bytes of content."
+        else:
+            log += " | No attachments."
+            
+        debug_logs.append(log)
                             
-    status_text.empty()
-    
-    # 🚨 FIX: If it finds 0 resumes, actually tell the user instead of going blank!
     if len(candidates) == 0:
-        return [], f"Done! Scanned {processed} emails, but found 0 resumes (PDF/DOCX) in the last {days} days."
+        return [], "DEBUG REPORT:\n\n" + "\n".join(debug_logs)
         
     return candidates, "Success"
+
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
 status = ""
 is_ready_to_scan = True
 outlook_account = None
 
-# 1. OUTLOOK AUTHENTICATION GATE (THE BYPASS)
+# 1. OUTLOOK AUTHENTICATION GATE
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         
@@ -223,7 +232,6 @@ if provider == "Outlook / Office 365 (Corporate)":
             is_ready_to_scan = False
             
             if "o365_auth_flow" not in st.session_state:
-                # We bypass the fragile O365 wrapper entirely and use pure MSAL
                 scopes = ['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read']
                 flow = outlook_account.con.msal_client.initiate_auth_code_flow(
                     scopes=scopes, 
@@ -240,17 +248,13 @@ if provider == "Outlook / Office 365 (Corporate)":
                 
                 if submitted and result_url:
                     try:
-                        # Extract the data from your pasted URL
                         query_params = dict(parse_qsl(urlparse(result_url).query))
-                        
-                        # Feed the URL data and the pure MSAL memory flow back into MSAL
                         result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(
                             auth_code_flow=st.session_state.o365_auth_flow,
                             auth_response=query_params
                         )
                         
                         if "access_token" in result:
-                            # BOOM: Backdoor the successfully verified token into O365's memory
                             outlook_account.con.token_backend.token = result
                             outlook_account.con.token_backend.save_token()
                             st.success("✅ Success! You can now scan your inbox.")
@@ -271,7 +275,7 @@ if is_ready_to_scan:
                     candidates, status = run_gmail_scan(email_user, email_pass, days_back, jd)
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner("Mining Outlook Resumes..."):
+            with st.spinner("Running X-Ray Outlook Scan..."):
                 candidates, status = run_outlook_scan(outlook_account, days_back, jd)
 
 # 3. DISPLAY RESULTS
@@ -316,8 +320,6 @@ if candidates:
             st.divider()
 
 elif status and status != "Success" and status != "Waiting...":
-    st.warning(status)
-
-
-
-
+    # Print the debug logs into a code block so it looks clean
+    st.warning("⚠️ No Resumes successfully parsed. Here is what the scanner saw:")
+    st.code(status, language="text")
