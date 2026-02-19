@@ -283,13 +283,15 @@ if is_ready_to_scan:
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
 
-# 3. DISPLAY RESULTS (Pull from memory!)
+# 3. DISPLAY RESULTS
+# We use st.session_state so the page doesn't go blank when you click Download
 if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
     display_cands = st.session_state.scanned_candidates
     
     st.success(f"✅ Found {len(display_cands)} Candidates")
-    st.divider()
     
+    # --- DUMB AI FALLBACK SCORING ---
+    # (We will replace this with real LLM scoring next)
     if jd:
         documents = [jd] + [c['text'] for c in display_cands]
         vectorizer = TfidfVectorizer(stop_words='english')
@@ -301,30 +303,49 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
         except Exception: 
             pass
             
-        display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
+    display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
+    # --- THE TABLE UI ---
+    st.divider()
+    
+    # TABLE HEADERS
+    h1, h2, h3, h4, h5, h6, h7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
+    h1.markdown("**Score**")
+    h2.markdown("**Name**")
+    h3.markdown("**Phone**")
+    h4.markdown("**Email**")
+    h5.markdown("**Skills**")
+    h6.markdown("**Exp**")
+    h7.markdown("**Resume**")
+    st.markdown("---") # A thin line under headers
+
+    # TABLE ROWS
     for c in display_cands:
-        with st.container():
-            c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-            with c1:
-                st.metric("Score", f"{c.get('Match %', 0)}%")
-            with c2:
-                st.subheader(c['Name'])
-                st.caption(f"{c['Email']}")
-                st.caption(f"📞 {c['Phone']}")
-            with c3:
-                st.write(f"**Skills:** {c['Skills']}")
-                st.write(f"**Exp:** {c['Experience']}")
-            with c4:
-                st.write("#")
-                st.download_button(
-                    "📥 Download", 
-                    data=c['Bytes'], 
-                    file_name=c['Filename'], 
-                    mime="application/octet-stream", 
-                    key=f"dl_{c['Filename']}"
-                )
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
+        
+        with col1: st.write(f"**{c.get('Match %', 0)}%**")
+        with col2: st.write(c.get('Name', 'N/A'))
+        with col3: st.write(c.get('Phone', 'N/A'))
+        with col4: st.caption(c.get('Email', 'N/A'))
+        with col5: st.caption(c.get('Skills', 'N/A'))
+        with col6: st.write(c.get('Experience', 'N/A'))
+        with col7:
+            # The download button is now safely inside the table!
+            st.download_button(
+                label="📥 PDF", 
+                data=c['Bytes'], 
+                file_name=c['Filename'], 
+                mime="application/octet-stream", 
+                key=f"dl_{c['Filename']}"
+            )
+        st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
+
+# Show error if scan failed
+elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
+    st.warning(st.session_state.scan_status)
+                
             st.divider()
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
