@@ -237,7 +237,6 @@ if is_ready_to_scan:
                 candidates, status = run_outlook_scan(outlook_account, days_back, jd)
 
 # 3. DISPLAY RESULTS
-# 3. DISPLAY RESULTS
 if candidates:
     st.success(f"✅ Found {len(candidates)} Candidates")
     st.divider()
@@ -280,4 +279,5 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
 
