@@ -10,9 +10,11 @@ import docx
 import io
 import re
 import base64
+import json
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qsl
 from O365 import Account
+from openai import OpenAI
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide")
@@ -38,6 +40,9 @@ with st.sidebar:
     
     st.header("3. Job Description")
     jd = st.text_area("JD for Ranking:", height=150, placeholder="Python, AWS, 5+ years experience...")
+
+    st.header("4. AI Brain (LLM)")
+    openai_api_key = st.text_input("OpenAI API Key (Required for high accuracy):", type="password", placeholder="sk-proj-...")
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text):
@@ -359,5 +364,6 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
 
