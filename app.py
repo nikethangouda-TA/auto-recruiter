@@ -144,11 +144,9 @@ def run_outlook_scan(account_obj, days, jd_text):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
-    # FIX 1: Explicitly target the Inbox so we don't scan hidden system folders
     inbox = account_obj.mailbox().inbox_folder()
     since_date = datetime.now() - timedelta(days=days)
     
-    # Grab a large batch of recent emails to scan through
     messages = inbox.get_messages(limit=2000) 
     
     candidates = []
@@ -158,11 +156,9 @@ def run_outlook_scan(account_obj, days, jd_text):
     for msg in messages:
         processed += 1
         
-        # Update UI so you can actually see it working
         if processed % 25 == 0:
             status_text.write(f"Scanning Inbox: Checked {processed} emails...")
         
-        # FIX 2: Check the date. If it's old, SKIP it (continue) instead of STOPPING (break)
         msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
         if msg_date:
             msg_date = msg_date.replace(tzinfo=None)
@@ -172,8 +168,8 @@ def run_outlook_scan(account_obj, days, jd_text):
         # ATTACHMENT CHECK
         if getattr(msg, 'has_attachments', False):
             try:
-                # Tell Outlook to download the actual files
-                msg.attachments.get_attachments()
+                # 🚨 FIX: The official O365 command to pull file data into memory
+                msg.attachments.download_attachments()
             except Exception:
                 pass 
                 
@@ -187,7 +183,8 @@ def run_outlook_scan(account_obj, days, jd_text):
                             
                         content = read_file_content(file_bytes, att.name)
                         
-                        if len(content) > 20: 
+                        # Lowered character limit just in case it's a short resume
+                        if len(content) > 5: 
                             meta = extract_details(content, jd_text)
                             candidates.append({
                                 "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
@@ -201,8 +198,12 @@ def run_outlook_scan(account_obj, days, jd_text):
                             })
                             
     status_text.empty()
+    
+    # 🚨 FIX: If it finds 0 resumes, actually tell the user instead of going blank!
+    if len(candidates) == 0:
+        return [], f"Done! Scanned {processed} emails, but found 0 resumes (PDF/DOCX) in the last {days} days."
+        
     return candidates, "Success"
-
 # --- MAIN LOGIC & UI FLOW ---
 candidates = []
 status = ""
@@ -316,6 +317,7 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
 
 
 
