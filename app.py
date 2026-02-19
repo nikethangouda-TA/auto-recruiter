@@ -282,16 +282,13 @@ if is_ready_to_scan:
                 # SAVE TO MEMORY
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
-
 # 3. DISPLAY RESULTS
-# We use st.session_state so the page doesn't go blank when you click Download
 if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
     display_cands = st.session_state.scanned_candidates
     
     st.success(f"✅ Found {len(display_cands)} Candidates")
+    st.divider()
     
-    # --- DUMB AI FALLBACK SCORING ---
-    # (We will replace this with real LLM scoring next)
     if jd:
         documents = [jd] + [c['text'] for c in display_cands]
         vectorizer = TfidfVectorizer(stop_words='english')
@@ -306,9 +303,6 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
     display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
     # --- THE TABLE UI ---
-    st.divider()
-    
-    # TABLE HEADERS
     h1, h2, h3, h4, h5, h6, h7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
     h1.markdown("**Score**")
     h2.markdown("**Name**")
@@ -317,12 +311,10 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
     h5.markdown("**Skills**")
     h6.markdown("**Exp**")
     h7.markdown("**Resume**")
-    st.markdown("---") # A thin line under headers
+    st.markdown("---")
 
-    # TABLE ROWS
     for c in display_cands:
         col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
-        
         with col1: st.write(f"**{c.get('Match %', 0)}%**")
         with col2: st.write(c.get('Name', 'N/A'))
         with col3: st.write(c.get('Phone', 'N/A'))
@@ -330,7 +322,6 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
         with col5: st.caption(c.get('Skills', 'N/A'))
         with col6: st.write(c.get('Experience', 'N/A'))
         with col7:
-            # The download button is now safely inside the table!
             st.download_button(
                 label="📥 PDF", 
                 data=c['Bytes'], 
@@ -339,12 +330,6 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
                 key=f"dl_{c['Filename']}"
             )
         st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
-
-# Show error if scan failed
-elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
-    st.warning(st.session_state.scan_status)
-                
-            st.divider()
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
