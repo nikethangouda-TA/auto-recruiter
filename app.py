@@ -10,7 +10,7 @@ import docx
 import io
 import re
 from datetime import datetime, timedelta
-from O365 import Account, FileSystemTokenBackend
+from O365 import Account
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide")
@@ -19,19 +19,16 @@ st.title("🏢 Auto Recruiter: Enterprise Edition")
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("1. Connection Type")
-    # THE SWITCH: Gmail vs Outlook
     provider = st.radio("Select Email Provider:", ["Gmail (Personal/App Password)", "Outlook / Office 365 (Corporate)"])
     
     st.divider()
     
-    # CREDENTIALS UI
     if provider == "Gmail (Personal/App Password)":
         email_user = st.text_input("Email Address")
         email_pass = st.text_input("App Password", type="password")
     else:
         st.info("ℹ️ Outlook uses Secure OAuth. No App Password needed.")
-        # Instructions for the user to get these keys (One time setup)
-        client_id = st.text_input("Client ID (Azure)", help="Register an app in Azure Portal to get this.")
+        client_id = st.text_input("Client ID (Azure)")
         client_secret = st.text_input("Client Secret (Azure)", type="password")
 
     st.header("2. Settings")
@@ -93,7 +90,7 @@ def decode_fname(header_val):
         else: filename += text
     return filename
 
-# --- GMAIL ENGINE (IMAP) ---
+# --- GMAIL ENGINE ---
 def run_gmail_scan(user, password, days, jd_text):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try:
@@ -129,7 +126,7 @@ def run_gmail_scan(user, password, days, jd_text):
                                     if len(content) > 20:
                                         meta = extract_details(content, jd_text)
                                         candidates.append({
-                                            "Name": meta["Email"].split('@')[0],
+                                            "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
                                             "Email": meta["Email"],
                                             "Phone": meta["Phone"],
                                             "Experience": meta["Experience"],
@@ -141,106 +138,98 @@ def run_gmail_scan(user, password, days, jd_text):
     mail.logout()
     return candidates, "Success"
 
-# --- OUTLOOK ENGINE (MICROSOFT GRAPH) ---
+# --- OUTLOOK ENGINE ---
 def run_outlook_scan(client_id, client_secret, days, jd_text):
-    # Using Session Backend (Ephemeral)
-    credentials = (client_id, client_secret)
-    account = Account(credentials)
-    
-    # 1. AUTHENTICATE
+    account = Account((client_id, client_secret))
     if not account.is_authenticated:
-        # Generate Auth Link
-        url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
-        st.warning("⚠️ Action Required: Please click the link below to authorize Outlook access.")
-        st.markdown(f"[**👉 Click to Login to Outlook**]({url})", unsafe_allow_html=True)
+        return [], "Please authenticate with Outlook first."
         
-        # Input for the return URL
-        result_url = st.text_input("Paste the full URL you were redirected to (localhost) here:")
-        if result_url:
-            try:
-                result = account.con.request_token(result_url, state=state, redirect_uri='http://localhost:8501')
-                if result:
-                    st.success("✅ Outlook Authenticated!")
-                else:
-                    return [], "Authentication failed."
-            except Exception as e:
-                return [], f"Auth Error: {e}"
-        else:
-            return [], "Waiting for authentication..."
+    mailbox = account.mailbox()
+    since_date = datetime.now() - timedelta(days=days)
+    
+    # Fast filtering for Outlook
+    query = mailbox.new_query().on_attribute('has_attachments').equals(True).chain('and').on_attribute('received_date_time').greater_equal(since_date)
+    messages = mailbox.get_messages(limit=250, query=query)
+    
+    candidates = []
+    msg_list = list(messages)
+    if not msg_list: return [], "No emails found in the given timeframe."
 
-    # 2. SCAN
-    if account.is_authenticated:
-        st.toast("Scanning Outlook Inbox...", icon="🔍")
-        mailbox = account.mailbox()
-        
-        # Calculate Date
-        since_date = datetime.now() - timedelta(days=days)
-        
-        # QUERY: Has attachments AND received >= date
-        query = mailbox.new_query().on_attribute('has_attachments').equals(True).chain('and').on_attribute('received_date_time').greater_equal(since_date)
-        
-        # FETCH (Limit to 100 for speed in demo)
-        messages = mailbox.get_messages(limit=100, query=query)
-        
-        candidates = []
-        bar = st.progress(0)
-        
-        # Convert generator to list to track progress
-        msg_list = list(messages)
-        if not msg_list: return [], "No emails found."
+    bar = st.progress(0)
+    for idx, msg in enumerate(msg_list):
+        bar.progress((idx + 1) / len(msg_list))
+        for att in msg.attachments:
+            if att.name.lower().endswith(('.pdf', '.docx')):
+                file_bytes = att.content
+                content = read_file_content(file_bytes, att.name)
+                
+                if len(content) > 20:
+                    meta = extract_details(content, jd_text)
+                    candidates.append({
+                        "Name": meta["Email"].split('@')[0] if meta["Email"] != "N/A" else "Candidate",
+                        "Email": meta["Email"],
+                        "Phone": meta["Phone"],
+                        "Experience": meta["Experience"],
+                        "Skills": meta["Skills Match"],
+                        "Filename": att.name,
+                        "Bytes": file_bytes,
+                        "text": content
+                    })
+    return candidates, "Success"
 
-        for idx, msg in enumerate(msg_list):
-            bar.progress((idx + 1) / len(msg_list))
-            
-            # Check Attachments
-            for att in msg.attachments:
-                if att.name.lower().endswith(('.pdf', '.docx')):
-                    # Download to memory
-                    file_bytes = att.content
-                    content = read_file_content(file_bytes, att.name)
-                    
-                    if len(content) > 20:
-                        meta = extract_details(content, jd_text)
-                        candidates.append({
-                            "Name": meta["Email"].split('@')[0],
-                            "Email": meta["Email"],
-                            "Phone": meta["Phone"],
-                            "Experience": meta["Experience"],
-                            "Skills": meta["Skills Match"],
-                            "Filename": att.name,
-                            "Bytes": file_bytes,
-                            "text": content
-                        })
-        return candidates, "Success"
-    return [], "Waiting..."
-
-# --- MAIN LOGIC ---
+# --- MAIN LOGIC & UI FLOW ---
 candidates = []
 status = ""
+is_ready_to_scan = True
 
-if st.button("🚀 Start Recruiter Engine"):
-    if provider == "Gmail (Personal/App Password)":
-        if not email_user or not email_pass:
-            st.error("Credentials required.")
-        else:
-            with st.spinner("Connecting to Gmail..."):
-                candidates, status = run_gmail_scan(email_user, email_pass, days_back, jd)
-    
-    elif provider == "Outlook / Office 365 (Corporate)":
-        if not client_id or not client_secret:
-            st.error("Client ID and Secret required for Corporate Access.")
-        else:
-            # We don't use spinner here because it interrupts the auth flow
-            candidates, status = run_outlook_scan(client_id, client_secret, days_back, jd)
+# 1. OUTLOOK AUTHENTICATION GATE (Happens before the Start Button)
+if provider == "Outlook / Office 365 (Corporate)":
+    if client_id and client_secret:
+        account = Account((client_id, client_secret))
+        if not account.is_authenticated:
+            is_ready_to_scan = False
+            
+            # Generate Link
+            url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read'], redirect_uri='http://localhost:8501')
+            st.warning("⚠️ Outlook Authentication Required")
+            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({url})", unsafe_allow_html=True)
+            
+            # Form to safely capture the URL without refreshing early
+            with st.form("auth_form"):
+                result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
+                submitted = st.form_submit_button("Verify Connection")
+                
+                if submitted and result_url:
+                    try:
+                        result = account.con.request_token(result_url, state=state, redirect_uri='http://localhost:8501')
+                        if result:
+                            st.success("✅ Success! You can now scan your inbox.")
+                            st.rerun() # Refresh to show the Start button
+                        else:
+                            st.error("Verification failed. Please try again.")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
-# --- RESULTS ---
+# 2. RUN THE ENGINE
+if is_ready_to_scan:
+    if st.button("🚀 Start Recruiter Engine"):
+        if provider == "Gmail (Personal/App Password)":
+            if not email_user or not email_pass:
+                st.error("Credentials required.")
+            else:
+                with st.spinner("Connecting to Gmail..."):
+                    candidates, status = run_gmail_scan(email_user, email_pass, days_back, jd)
+        
+        elif provider == "Outlook / Office 365 (Corporate)":
+            with st.spinner("Mining Outlook Resumes..."):
+                candidates, status = run_outlook_scan(client_id, client_secret, days_back, jd)
+
+# 3. DISPLAY RESULTS
 if candidates:
     st.success(f"✅ Found {len(candidates)} Candidates")
     st.divider()
     
-    # Simple Ranking
     if jd:
-        # TF-IDF logic inside
         documents = [jd] + [c['text'] for c in candidates]
         vectorizer = TfidfVectorizer(stop_words='english')
         try:
@@ -259,9 +248,10 @@ if candidates:
             with c2:
                 st.subheader(c['Name'])
                 st.caption(f"{c['Email']}")
+                st.caption(f"📞 {c['Phone']}")
             with c3:
-                st.write(f"Skills: {c['Skills']}")
-                st.write(f"Exp: {c['Experience']}")
+                st.write(f"**Skills:** {c['Skills']}")
+                st.write(f"**Exp:** {c['Experience']}")
             with c4:
                 st.write("#")
                 st.download_button("📥 Download", data=c['Bytes'], file_name=c['Filename'], mime="application/octet-stream", key=f"dl_{c['Filename']}")
@@ -269,7 +259,3 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
-
-
-
-
