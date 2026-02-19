@@ -150,7 +150,7 @@ def run_outlook_scan(client_id, client_secret, days, jd_text):
     # 1. AUTHENTICATE
     if not account.is_authenticated:
         # Generate Auth Link
-        url, state = account.con.get_authorization_url(requested_scopes=['basic', 'message_all'])
+        url, state = account.con.get_authorization_url(requested_scopes=['User.Read', 'Mail.Read', 'offline_access'])
         st.warning("⚠️ Action Required: Please click the link below to authorize Outlook access.")
         st.markdown(f"[**👉 Click to Login to Outlook**]({url})", unsafe_allow_html=True)
         
@@ -269,3 +269,4 @@ if candidates:
 
 elif status and status != "Success" and status != "Waiting...":
     st.warning(status)
+
