@@ -213,50 +213,72 @@ status = ""
 is_ready_to_scan = True
 outlook_account = None
 
-# 1. OUTLOOK AUTHENTICATION GATE
-if provider == "Outlook / Office 365 (Corporate)":
-    if client_id and client_secret:
+# --- OUTLOOK ENGINE ---
+def run_outlook_scan(account_obj, days, jd_text):
+    if not account_obj.is_authenticated:
+        return [], "Please authenticate with Outlook first."
         
-        if "o365_account" not in st.session_state:
-            st.session_state.o365_account = Account((client_id, client_secret))
-            
-        outlook_account = st.session_state.o365_account
+    inbox = account_obj.mailbox().inbox_folder()
+    since_date = datetime.now() - timedelta(days=days)
+    
+    messages = inbox.get_messages(limit=2000) 
+    
+    candidates = []
+    processed = 0
+    status_text = st.empty()
+    
+    for msg in messages:
+        processed += 1
         
-        if not outlook_account.is_authenticated:
-            is_ready_to_scan = False
-            
-            if "o365_auth_flow" not in st.session_state:
-                scopes = ['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read']
-                flow = outlook_account.con.msal_client.initiate_auth_code_flow(
-                    scopes=scopes, 
-                    redirect_uri='http://localhost:8501'
-                )
-                st.session_state.o365_auth_flow = flow
-            
-            st.warning("⚠️ Outlook Authentication Required")
-            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_flow['auth_uri']})", unsafe_allow_html=True)
-            
-            with st.form("auth_form"):
-                result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
-                submitted = st.form_submit_button("Verify Connection")
+        if processed % 25 == 0:
+            status_text.write(f"Scanning Inbox: Checked {processed} emails...")
+        
+        msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
+        if msg_date:
+            msg_date = msg_date.replace(tzinfo=None)
+            if msg_date < since_date:
+                continue 
                 
-                if submitted and result_url:
-                    try:
-                        query_params = dict(parse_qsl(urlparse(result_url).query))
-                        result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(
-                            auth_code_flow=st.session_state.o365_auth_flow,
-                            auth_response=query_params
-                        )
+        # ATTACHMENT CHECK
+        if getattr(msg, 'has_attachments', False):
+            try:
+                msg.attachments.download_attachments()
+            except Exception:
+                pass 
+                
+            for att in msg.attachments:
+                if att.name and att.name.lower().endswith(('.pdf', '.docx')):
+                    file_bytes = getattr(att, 'content', None)
+                    
+                    if file_bytes:
+                        if isinstance(file_bytes, str):
+                            file_bytes = file_bytes.encode('utf-8', errors='ignore')
+                            
+                        content = read_file_content(file_bytes, att.name)
                         
-                        if "access_token" in result:
-                            outlook_account.con.token_backend.token = result
-                            outlook_account.con.token_backend.save_token()
-                            st.success("✅ Success! You can now scan your inbox.")
-                            st.rerun() 
-                        else:
-                            st.error(f"Verification failed: {result.get('error_description', result)}")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                        if len(content) > 5: 
+                            # CONNECTING THE BRAIN HERE! (Safe fallback if key is empty)
+                            meta = extract_details(content, jd_text, openai_api_key)
+                            
+                            candidates.append({
+                                "Name": meta.get("Name", "Candidate"),
+                                "Email": meta.get("Email", "N/A"),
+                                "Phone": meta.get("Phone", "N/A"),
+                                "Experience": meta.get("Experience", "N/A"),
+                                "Skills": meta.get("Skills", "N/A"),
+                                "Match %": meta.get("Match %", 0),
+                                "Filename": att.name,
+                                "Bytes": file_bytes,
+                                "text": content
+                            })
+                            
+    status_text.empty()
+    
+    if len(candidates) == 0:
+        return [], f"Done! Scanned {processed} emails, but found 0 resumes in the last {days} days."
+        
+    return candidates, "Success"
+    
 # 2. RUN THE ENGINE
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
@@ -289,6 +311,7 @@ if is_ready_to_scan:
                 c["Match %"] = int(round(cosine_sim[0][i] * 100))
         except Exception: 
             pass
+
 
 
 
