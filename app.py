@@ -3,6 +3,7 @@ import pandas as pd
 import imaplib
 import email
 from email.header import decode_header
+from email.utils import parsedate_to_datetime
 import io
 import re
 import base64
@@ -42,7 +43,17 @@ with st.sidebar:
         client_secret = st.text_input("Client Secret (Azure)", type="password")
 
     st.header("2. Settings")
-    days_back = st.number_input("Look back days:", min_value=1, value=365)
+    
+    # --- THE NEW PRECISION TIME DROPDOWN ---
+    time_options = [
+        "5 Minutes", "15 Minutes", "30 Minutes", "45 Minutes", 
+        "1 Hour", "2 Hours", "4 Hours", "6 Hours", "8 Hours", "9 Hours", "10 Hours", "12 Hours", "24 Hours",
+        "1 Day", "2 Days", "3 Days", "4 Days", "5 Days", "6 Days", "7 Days",
+        "1 Week", "2 Weeks", "3 Weeks", "4 Weeks",
+        "1 Month", "2 Months", "3 Months", "4 Months", "5 Months", "6 Months", 
+        "7 Months", "8 Months", "9 Months", "10 Months", "11 Months", "12 Months"
+    ]
+    selected_time = st.selectbox("Look back time:", time_options, index=13) # Defaults to "1 Day"
     
     st.header("3. Job Description")
     jd = st.text_area("JD for Ranking:", height=150, placeholder="Paste JD here (e.g. Python, AWS, 5+ years...)")
@@ -75,6 +86,17 @@ with st.sidebar:
             """)
             
     api_key = st.text_input(f"Paste your Key here:", type="password")
+
+# --- TIME CONVERTER HELPER ---
+def get_timedelta(selection):
+    val = int(selection.split()[0])
+    unit = selection.split()[1].lower()
+    if "minute" in unit: return timedelta(minutes=val)
+    elif "hour" in unit: return timedelta(hours=val)
+    elif "day" in unit: return timedelta(days=val)
+    elif "week" in unit: return timedelta(weeks=val)
+    elif "month" in unit: return timedelta(days=val * 30)
+    return timedelta(days=1)
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text, key, ai_engine):
@@ -109,7 +131,6 @@ def extract_details(text, jd_text, key, ai_engine):
                         temperature=0,
                         messages=[{"role": "user", "content": prompt}]
                     )
-                    # Claude sometimes wraps JSON in markdown blocks, this strips it
                     raw_text = response.content[0].text.strip()
                     if raw_text.startswith("```json"):
                         raw_text = raw_text[7:-3].strip()
@@ -192,7 +213,7 @@ def decode_fname(header_val):
     return filename
 
 # --- GMAIL ENGINE ---
-def run_gmail_scan(user, password, days, jd_text, current_key, current_engine):
+def run_gmail_scan(user, password, time_delta, jd_text, current_key, current_engine):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try:
         mail.login(user, password)
@@ -200,10 +221,15 @@ def run_gmail_scan(user, password, days, jd_text, current_key, current_engine):
         return [], f"Login Failed: {e}"
 
     mail.select("INBOX")
-    date_str = (datetime.now() - timedelta(days=days)).strftime("%Y/%m/%d")
-    search_cmd = f'(X-GM-RAW "filename:pdf OR filename:docx after:{date_str}")'
     
+    # Calculate exact precise minute to look back to
+    precise_since_date = datetime.now() - time_delta
+    # Cast a wider 1-day net for the IMAP server search so we don't miss midnight rollover emails
+    imap_search_date = (precise_since_date - timedelta(days=1)).strftime("%Y/%m/%d")
+    
+    search_cmd = f'(X-GM-RAW "filename:pdf OR filename:docx after:{imap_search_date}")'
     typ, data = mail.search(None, search_cmd)
+    
     if not data[0]: return [], "No resumes found."
 
     email_ids = data[0].split()
@@ -216,6 +242,18 @@ def run_gmail_scan(user, password, days, jd_text, current_key, current_engine):
         for response_part in msg_data:
             if isinstance(response_part, tuple):
                 msg = email.message_from_bytes(response_part[1])
+                
+                # EXACT MINUTE FILTER
+                msg_date_header = msg.get("Date")
+                if msg_date_header:
+                    try:
+                        msg_date = parsedate_to_datetime(msg_date_header)
+                        if msg_date.tzinfo: msg_date = msg_date.replace(tzinfo=None)
+                        if msg_date < precise_since_date:
+                            continue # Skip! This email arrived before our exact 5/15/30 minute window
+                    except:
+                        pass
+                
                 if msg.is_multipart():
                     for part in msg.walk():
                         if "attachment" in part.get("Content-Disposition", ""):
@@ -241,13 +279,14 @@ def run_gmail_scan(user, password, days, jd_text, current_key, current_engine):
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE ---
-def run_outlook_scan(account_obj, days, jd_text, current_key, current_engine):
+def run_outlook_scan(account_obj, time_delta, jd_text, current_key, current_engine):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
     inbox = account_obj.mailbox().inbox_folder()
-    since_date = datetime.now() - timedelta(days=days)
     
+    # Exact minute precision filter
+    since_date = datetime.now() - time_delta
     messages = inbox.get_messages(limit=2000) 
     
     candidates = []
@@ -263,7 +302,7 @@ def run_outlook_scan(account_obj, days, jd_text, current_key, current_engine):
         if msg_date:
             msg_date = msg_date.replace(tzinfo=None)
             if msg_date < since_date:
-                continue 
+                continue # Skip! Arrived before our exact window
                 
         if getattr(msg, 'has_attachments', False):
             try:
@@ -297,7 +336,7 @@ def run_outlook_scan(account_obj, days, jd_text, current_key, current_engine):
                             
     status_text.empty()
     if len(candidates) == 0:
-        return [], f"Done! Scanned {processed} emails, but found 0 resumes in the last {days} days."
+        return [], f"Done! Scanned {processed} emails, but found 0 resumes in that time window."
     return candidates, "Success"
 
 # --- MAIN LOGIC & UI FLOW ---
@@ -347,18 +386,22 @@ if provider == "Outlook / Office 365 (Corporate)":
 # 2. RUN THE ENGINE
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
+        
+        # Convert the dropdown text into actual math
+        time_delta = get_timedelta(selected_time)
+        
         if provider == "Gmail (Personal/App Password)":
             if not email_user or not email_pass:
                 st.error("Credentials required.")
             else:
-                with st.spinner("Mining Resumes..."):
-                    cands, stat = run_gmail_scan(email_user, email_pass, days_back, jd, api_key, ai_choice)
+                with st.spinner(f"Mining Resumes from the last {selected_time}..."):
+                    cands, stat = run_gmail_scan(email_user, email_pass, time_delta, jd, api_key, ai_choice)
                     st.session_state.scanned_candidates = cands
                     st.session_state.scan_status = stat
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner("Mining Resumes..."):
-                cands, stat = run_outlook_scan(outlook_account, days_back, jd, api_key, ai_choice)
+            with st.spinner(f"Mining Resumes from the last {selected_time}..."):
+                cands, stat = run_outlook_scan(outlook_account, time_delta, jd, api_key, ai_choice)
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
 
