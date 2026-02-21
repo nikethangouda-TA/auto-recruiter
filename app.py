@@ -24,7 +24,7 @@ except ImportError:
     pass
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide", initial_sidebar_state="expanded")
 
 # --- ENTERPRISE SAAS CSS INJECTION ---
 st.markdown("""
@@ -64,20 +64,24 @@ st.markdown("""
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
     }
     
-    /* Override Streamlit Default Red Primary Button to Enterprise Blue */
-    [data-testid="stButton"] button[data-baseweb="button"] {
-        background-color: #2563EB !important; /* Trust Blue */
+    /* FORCE Primary Buttons to be Enterprise Blue */
+    button[kind="primary"] {
+        background-color: #2563EB !important; 
         color: white !important;
-        border: none !important;
+        border-color: #2563EB !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
-        transition: all 0.2s ease-in-out;
     }
     
-    /* Button Hover Effect */
-    [data-testid="stButton"] button[data-baseweb="button"]:hover {
-        background-color: #1D4ED8 !important; /* Darker Blue */
-        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4) !important;
+    button[kind="primary"]:hover {
+        background-color: #1D4ED8 !important; 
+        border-color: #1D4ED8 !important;
+    }
+    
+    /* Regular Buttons */
+    button[kind="secondary"] {
+        border-color: #334155 !important;
+        color: #F8FAFC !important;
     }
     
     /* Override Streamlit Text Inputs */
@@ -97,15 +101,6 @@ st.markdown("""
         border-bottom-color: #2563EB !important;
     }
     
-    /* Clean Success/Warning Banners */
-    [data-testid="stNotification"] {
-        background-color: #1E293B !important;
-        border: 1px solid #334155 !important;
-        color: #F8FAFC !important;
-    }
-    
-    /* Hide the top header line */
-    header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -146,10 +141,10 @@ if not st.session_state.authenticated:
         
         # --- LOGIN TAB ---
         with tab1:
-            st.write("") # Spacing
+            st.write("") 
             login_email = st.text_input("Work Email", key="log_email")
             login_password = st.text_input("Password", type="password", key="log_pwd")
-            st.write("") # Spacing
+            st.write("") 
             if st.button("Access Dashboard", use_container_width=True, type="primary"):
                 if not login_email or not login_password:
                     st.error("Please enter both email and password.")
@@ -164,12 +159,12 @@ if not st.session_state.authenticated:
 
         # --- SIGNUP & OTP TAB ---
         with tab2:
-            st.write("") # Spacing
+            st.write("") 
             if not st.session_state.awaiting_otp:
                 signup_email = st.text_input("Work Email *", key="reg_email")
                 signup_phone = st.text_input("Mobile Number *", key="reg_phone")
                 signup_password = st.text_input("Create Password *", type="password", key="reg_pwd")
-                st.write("") # Spacing
+                st.write("") 
                 
                 if st.button("Create Account & Send OTP", use_container_width=True, type="primary"):
                     if not signup_email or not signup_password or not signup_phone:
@@ -192,7 +187,7 @@ if not st.session_state.authenticated:
                 st.info(f"📩 We sent a 6-digit secure code to **{st.session_state.temp_signup_email}**")
                 
                 otp_code = st.text_input("Enter 6-Digit OTP Code")
-                st.write("") # Spacing
+                st.write("") 
                 
                 if st.button("Verify Identity & Login", use_container_width=True, type="primary"):
                     if not otp_code:
@@ -223,8 +218,6 @@ if not st.session_state.authenticated:
 # ==========================================
 # --- SECURE AREA: MAIN APP LOGIC BELOW ---
 # ==========================================
-
-st.set_option('client.showSidebarNavigation', True)
 
 with st.sidebar:
     st.success(f"👤 {st.session_state.user_email}")
@@ -487,9 +480,6 @@ def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, curren
     if len(candidates) == 0: return [], f"Done! Scanned {processed} emails, but found 0 resumes."
     return candidates, "Success"
 
-is_ready_to_scan = True
-outlook_account = None
-
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         if "o365_account" not in st.session_state: st.session_state.o365_account = Account((client_id, client_secret))
@@ -514,7 +504,7 @@ if provider == "Outlook / Office 365 (Corporate)":
                     except Exception as e: st.error(f"Verification failed: {e}")
 
 if is_ready_to_scan:
-    if st.button("🚀 Start Recruiter Engine"):
+    if st.button("🚀 Start Recruiter Engine", type="primary"):
         if filter_type == "Recent Window":
             end_dt = datetime.now()
             start_dt = end_dt - get_timedelta(selected_time)
@@ -525,7 +515,7 @@ if is_ready_to_scan:
             status_text = f"Mining Resumes from {start_date} to {end_date}..."
         
         if provider == "Gmail (Personal/App Password)":
-            if not email_user or not email_pass: st.error("Credentials required.")
+            if not email_user or not email_pass: st.error("Credentials required in the sidebar.")
             else:
                 with st.spinner(status_text):
                     cands, stat = run_gmail_scan(email_user, email_pass, start_dt, end_dt, jd, api_key, ai_choice)
