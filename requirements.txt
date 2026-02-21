@@ -6,3 +6,4 @@ python-docx
 O365
 openai
 google-generativeai
+anthropic
