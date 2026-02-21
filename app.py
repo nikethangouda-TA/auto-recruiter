@@ -247,4 +247,5 @@ def run_outlook_scan(account_obj, days, jd_text, current_key, current_engine):
                 
             for att in msg.attachments:
                 if att.name and att.name.lower().endswith(('.pdf', '.docx')):
-                    file_bytes = getattr(att, 'content',
+                    file_bytes = getattr(att, 'content'),
+
