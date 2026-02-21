@@ -6,7 +6,6 @@ from email.header import decode_header
 from email.utils import parsedate_to_datetime
 import io
 import re
-import base64
 import json
 import time 
 from datetime import datetime, timedelta
@@ -20,15 +19,94 @@ try:
     from openai import OpenAI
     import google.generativeai as genai
     import anthropic
+    from supabase import create_client, Client
 except ImportError:
     pass
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide")
-st.title("🏢 Auto Recruiter: Enterprise Edition")
+
+# --- DATABASE & AUTH SETUP ---
+@st.cache_resource
+def init_supabase():
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        return None
+
+supabase = init_supabase()
+
+# Initialize session state for auth
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user_email' not in st.session_state:
+    st.session_state.user_email = ""
+
+# --- THE LANDING PAGE (If not logged in) ---
+if not st.session_state.authenticated:
+    st.title("🏢 Auto Recruiter: Enterprise Edition")
+    st.markdown("### ⚡ AI-Powered Bulk Resume Mining for Top Agencies")
+    st.markdown("Stop reading resumes one by one. Connect your inbox, paste your Job Description, and let our proprietary AI engine instantly score, rank, and extract candidate data straight to Excel.")
+    
+    st.divider()
+    
+    if supabase is None:
+        st.error("⚠️ Database connection missing. Please configure Supabase in Streamlit Secrets.")
+        st.stop()
+        
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Log In")
+        with st.form("login_form"):
+            login_email = st.text_input("Email")
+            login_password = st.text_input("Password", type="password")
+            login_submit = st.form_submit_button("Log In")
+            
+            if login_submit:
+                try:
+                    response = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                    st.session_state.authenticated = True
+                    st.session_state.user_email = login_email
+                    st.success("Login successful! Loading engine...")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+
+    with col2:
+        st.subheader("Create an Account")
+        with st.form("signup_form"):
+            signup_email = st.text_input("Work Email")
+            signup_password = st.text_input("Create Password", type="password")
+            signup_submit = st.form_submit_button("Sign Up")
+            
+            if signup_submit:
+                try:
+                    response = supabase.auth.sign_up({"email": signup_email, "password": signup_password})
+                    st.success("✅ Account created successfully! You can now log in on the left.")
+                except Exception as e:
+                    st.error(f"Sign up failed: {e}")
+
+    # Stop the app right here so they cannot see the engine!
+    st.stop()
+
+# ==========================================
+# --- SECURE AREA: MAIN APP LOGIC BELOW ---
+# ==========================================
 
 # --- SIDEBAR ---
 with st.sidebar:
+    st.success(f"👤 Logged in as: {st.session_state.user_email}")
+    if st.button("🚪 Log Out"):
+        supabase.auth.sign_out()
+        st.session_state.authenticated = False
+        st.session_state.user_email = ""
+        st.rerun()
+        
+    st.divider()
+    
     st.header("1. Connection Type")
     provider = st.radio("Select Email Provider:", ["Gmail (Personal/App Password)", "Outlook / Office 365 (Corporate)"])
     
@@ -43,8 +121,6 @@ with st.sidebar:
         client_secret = st.text_input("Client Secret (Azure)", type="password")
 
     st.header("2. Settings")
-    
-    # --- THE NEW DUAL TIME FILTER ---
     filter_type = st.radio("Time Filter Type:", ["Recent Window", "Specific Date Range"])
     
     selected_time = None
@@ -60,9 +136,8 @@ with st.sidebar:
             "1 Month", "2 Months", "3 Months", "4 Months", "5 Months", "6 Months", 
             "7 Months", "8 Months", "9 Months", "10 Months", "11 Months", "12 Months"
         ]
-        selected_time = st.selectbox("Look back time:", time_options, index=13) # Defaults to "1 Day"
+        selected_time = st.selectbox("Look back time:", time_options, index=13) 
     else:
-        # Two elegant calendar widgets side-by-side
         c1, c2 = st.columns(2)
         with c1: start_date = st.date_input("From Date", value=datetime.today() - timedelta(days=7))
         with c2: end_date = st.date_input("To Date", value=datetime.today())
@@ -79,25 +154,17 @@ with st.sidebar:
     
     if "Claude" in ai_choice:
         with st.expander("❓ How to get a Claude Key"):
-            st.markdown("""
-            1. Go to [Anthropic Console](https://console.anthropic.com/).
-            2. Sign up and verify your phone number (usually grants $5 free credits).
-            3. Go to API Keys and create a new key.
-            """)
+            st.markdown("1. Go to [Anthropic Console](https://console.anthropic.com/).\n2. Sign up and verify phone number.\n3. Create API key.")
     elif "Gemini" in ai_choice:
         with st.expander("❓ How to get a FREE Gemini Key"):
-            st.markdown("""
-            1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
-            2. Sign in with Google and click **Create API key**.
-            """)
+            st.markdown("1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).\n2. Create API key.")
     else:
         with st.expander("❓ How to get an OpenAI Key"):
-            st.markdown("""
-            1. Go to [OpenAI Platform](https://platform.openai.com/api-keys).
-            2. Click **Create new secret key** (requires $5 minimum balance).
-            """)
+            st.markdown("1. Go to [OpenAI Platform](https://platform.openai.com/api-keys).\n2. Create secret key.")
             
     api_key = st.text_input(f"Paste your Key here:", type="password")
+
+st.title("🏢 Auto Recruiter: Dashboard")
 
 # --- TIME CONVERTER HELPER ---
 def get_timedelta(selection):
@@ -115,11 +182,8 @@ def extract_details(text, jd_text, key, ai_engine):
     if key:
         prompt = f"""
         You are an expert IT Recruiter. Extract candidate details from the following resume text.
-        
         Job Description: {jd_text if jd_text else 'None provided.'}
-        
         Resume Text: {text[:6000]} 
-        
         Respond STRICTLY with a valid JSON object containing exactly these keys. Do not include markdown formatting or any other text.
         {{
             "Name": "candidate full name or N/A",
@@ -130,21 +194,17 @@ def extract_details(text, jd_text, key, ai_engine):
             "Match": integer from 0 to 100 representing JD fit
         }}
         """
-        
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 if "Claude" in ai_engine:
                     client = anthropic.Anthropic(api_key=key)
                     response = client.messages.create(
-                        model="claude-3-5-sonnet-20241022",
-                        max_tokens=1000,
-                        temperature=0,
+                        model="claude-3-5-sonnet-20241022", max_tokens=1000, temperature=0,
                         messages=[{"role": "user", "content": prompt}]
                     )
                     raw_text = response.content[0].text.strip()
-                    if raw_text.startswith("```json"):
-                        raw_text = raw_text[7:-3].strip()
+                    if raw_text.startswith("```json"): raw_text = raw_text[7:-3].strip()
                     data = json.loads(raw_text)
 
                 elif "Gemini" in ai_engine:
@@ -155,9 +215,7 @@ def extract_details(text, jd_text, key, ai_engine):
                 else:
                     client = OpenAI(api_key=key)
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}],
-                        response_format={ "type": "json_object" } 
+                        model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], response_format={ "type": "json_object" } 
                     )
                     data = json.loads(response.choices[0].message.content)
                 
@@ -189,29 +247,23 @@ def extract_details(text, jd_text, key, ai_engine):
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     emails = re.findall(email_pattern, text)
     if emails: 
-        details["Email"] = emails[0]
-        details["Name"] = emails[0].split('@')[0]
+        details["Email"] = emails[0]; details["Name"] = emails[0].split('@')[0]
     exp_pattern = r'(\d+)\+?\s*years?'
     exps = re.findall(exp_pattern, text.lower())
     if exps:
-        try:
-            years = [int(x) for x in exps]
-            details["Experience"] = f"{max(years)} Years"
-        except Exception: pass
+        try: details["Experience"] = f"{max([int(x) for x in exps])} Years"
+        except: pass
     return details
 
 def read_file_content(file_bytes, filename):
     try:
         if filename.lower().endswith(".pdf"):
             pdf = PdfReader(io.BytesIO(file_bytes))
-            text = ""
-            for page in pdf.pages: text += page.extract_text() + " "
-            return text
+            return " ".join([page.extract_text() for page in pdf.pages])
         elif filename.lower().endswith(".docx"):
             doc = docx.Document(io.BytesIO(file_bytes))
             return "\n".join([para.text for para in doc.paragraphs])
-    except Exception as e: 
-        return f"DEBUG_ERROR: {str(e)}"
+    except Exception as e: return f"DEBUG_ERROR: {str(e)}"
     return ""
 
 def decode_fname(header_val):
@@ -226,17 +278,12 @@ def decode_fname(header_val):
 # --- GMAIL ENGINE ---
 def run_gmail_scan(user, password, start_dt, end_dt, jd_text, current_key, current_engine):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
-    try:
-        mail.login(user, password)
-    except Exception as e:
-        return [], f"Login Failed: {e}"
+    try: mail.login(user, password)
+    except Exception as e: return [], f"Login Failed: {e}"
 
     mail.select("INBOX")
-    
-    # IMAP requires date strings for its rough search (expanding the net by 1 day to be safe with timezones)
     imap_after = (start_dt - timedelta(days=1)).strftime("%Y/%m/%d")
     imap_before = (end_dt + timedelta(days=2)).strftime("%Y/%m/%d")
-    
     search_cmd = f'(X-GM-RAW "(filename:pdf OR filename:docx) after:{imap_after} before:{imap_before}")'
     typ, data = mail.search(None, search_cmd)
     
@@ -252,102 +299,68 @@ def run_gmail_scan(user, password, start_dt, end_dt, jd_text, current_key, curre
         for response_part in msg_data:
             if isinstance(response_part, tuple):
                 msg = email.message_from_bytes(response_part[1])
-                
-                # EXACT DATE & TIME FILTER
                 msg_date_header = msg.get("Date")
                 if msg_date_header:
                     try:
-                        msg_date = parsedate_to_datetime(msg_date_header)
-                        if msg_date.tzinfo: msg_date = msg_date.replace(tzinfo=None)
-                        
-                        # If the email falls outside our precise boundary, skip it immediately!
-                        if msg_date < start_dt or msg_date > end_dt:
-                            continue 
-                    except:
-                        pass
+                        msg_date = parsedate_to_datetime(msg_date_header).replace(tzinfo=None)
+                        if msg_date < start_dt or msg_date > end_dt: continue 
+                    except: pass
                 
                 if msg.is_multipart():
                     for part in msg.walk():
                         if "attachment" in part.get("Content-Disposition", ""):
                             fname = part.get_filename()
-                            if fname:
+                            if fname and fname.lower().endswith(('.pdf', '.docx')):
                                 filename = decode_fname(fname)
-                                if filename.lower().endswith(('.pdf', '.docx')):
-                                    content = read_file_content(part.get_payload(decode=True), filename)
-                                    if len(content) > 20:
-                                        meta = extract_details(content, jd_text, current_key, current_engine)
-                                        candidates.append({
-                                            "Name": meta.get("Name", "Candidate"),
-                                            "Email": meta.get("Email", "N/A"),
-                                            "Phone": meta.get("Phone", "N/A"),
-                                            "Experience": meta.get("Experience", "N/A"),
-                                            "Skills": meta.get("Skills", "N/A"),
-                                            "Match %": meta.get("Match %", 0),
-                                            "Filename": filename,
-                                            "Bytes": part.get_payload(decode=True),
-                                            "text": content
-                                        })
+                                content = read_file_content(part.get_payload(decode=True), filename)
+                                if len(content) > 20:
+                                    meta = extract_details(content, jd_text, current_key, current_engine)
+                                    candidates.append({
+                                        "Name": meta.get("Name", "Candidate"), "Email": meta.get("Email", "N/A"),
+                                        "Phone": meta.get("Phone", "N/A"), "Experience": meta.get("Experience", "N/A"),
+                                        "Skills": meta.get("Skills", "N/A"), "Match %": meta.get("Match %", 0),
+                                        "Filename": filename, "Bytes": part.get_payload(decode=True)
+                                    })
     mail.logout()
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE ---
 def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, current_engine):
-    if not account_obj.is_authenticated:
-        return [], "Please authenticate with Outlook first."
-        
+    if not account_obj.is_authenticated: return [], "Please authenticate with Outlook first."
     inbox = account_obj.mailbox().inbox_folder()
-    
     messages = inbox.get_messages(limit=2000) 
-    
     candidates = []
     processed = 0
     status_text = st.empty()
     
     for msg in messages:
         processed += 1
-        if processed % 25 == 0:
-            status_text.write(f"Scanning Inbox: Checked {processed} emails...")
-        
+        if processed % 25 == 0: status_text.write(f"Scanning Inbox: Checked {processed} emails...")
         msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
         if msg_date:
             msg_date = msg_date.replace(tzinfo=None)
-            # Exact boundary filter
-            if msg_date < start_dt or msg_date > end_dt:
-                continue 
+            if msg_date < start_dt or msg_date > end_dt: continue 
                 
         if getattr(msg, 'has_attachments', False):
-            try:
-                msg.attachments.download_attachments()
-            except Exception:
-                pass 
-                
+            try: msg.attachments.download_attachments()
+            except: pass 
             for att in msg.attachments:
                 if att.name and att.name.lower().endswith(('.pdf', '.docx')):
                     file_bytes = getattr(att, 'content', None)
                     if file_bytes:
-                        if isinstance(file_bytes, str):
-                            file_bytes = file_bytes.encode('utf-8', errors='ignore')
-                            
+                        if isinstance(file_bytes, str): file_bytes = file_bytes.encode('utf-8', errors='ignore')
                         content = read_file_content(file_bytes, att.name)
-                        
                         if len(content) > 5: 
                             meta = extract_details(content, jd_text, current_key, current_engine)
-                            
                             candidates.append({
-                                "Name": meta.get("Name", "Candidate"),
-                                "Email": meta.get("Email", "N/A"),
-                                "Phone": meta.get("Phone", "N/A"),
-                                "Experience": meta.get("Experience", "N/A"),
-                                "Skills": meta.get("Skills", "N/A"),
-                                "Match %": meta.get("Match %", 0),
-                                "Filename": att.name,
-                                "Bytes": file_bytes,
-                                "text": content
+                                "Name": meta.get("Name", "Candidate"), "Email": meta.get("Email", "N/A"),
+                                "Phone": meta.get("Phone", "N/A"), "Experience": meta.get("Experience", "N/A"),
+                                "Skills": meta.get("Skills", "N/A"), "Match %": meta.get("Match %", 0),
+                                "Filename": att.name, "Bytes": file_bytes
                             })
                             
     status_text.empty()
-    if len(candidates) == 0:
-        return [], f"Done! Scanned {processed} emails, but found 0 resumes in that time window."
+    if len(candidates) == 0: return [], f"Done! Scanned {processed} emails, but found 0 resumes."
     return candidates, "Success"
 
 # --- MAIN LOGIC & UI FLOW ---
@@ -356,74 +369,49 @@ outlook_account = None
 
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
-        if "o365_account" not in st.session_state:
-            st.session_state.o365_account = Account((client_id, client_secret))
-            
+        if "o365_account" not in st.session_state: st.session_state.o365_account = Account((client_id, client_secret))
         outlook_account = st.session_state.o365_account
         
         if not outlook_account.is_authenticated:
             is_ready_to_scan = False
             if "o365_auth_flow" not in st.session_state:
-                scopes = ['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read']
-                flow = outlook_account.con.msal_client.initiate_auth_code_flow(
-                    scopes=scopes, 
-                    redirect_uri='http://localhost:8501'
-                )
+                flow = outlook_account.con.msal_client.initiate_auth_code_flow(scopes=['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read'], redirect_uri='http://localhost:8501')
                 st.session_state.o365_auth_flow = flow
-            
             st.warning("⚠️ Outlook Authentication Required")
             st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_flow['auth_uri']})", unsafe_allow_html=True)
-            
             with st.form("auth_form"):
-                result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
-                submitted = st.form_submit_button("Verify Connection")
-                if submitted and result_url:
+                result_url = st.text_input("**Step 2:** Paste localhost URL here:")
+                if st.form_submit_button("Verify Connection") and result_url:
                     try:
-                        query_params = dict(parse_qsl(urlparse(result_url).query))
-                        result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(
-                            auth_code_flow=st.session_state.o365_auth_flow,
-                            auth_response=query_params
-                        )
+                        result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(auth_code_flow=st.session_state.o365_auth_flow, auth_response=dict(parse_qsl(urlparse(result_url).query)))
                         if "access_token" in result:
                             outlook_account.con.token_backend.token = result
                             outlook_account.con.token_backend.save_token()
-                            st.success("✅ Success! You can now scan your inbox.")
-                            st.rerun() 
-                        else:
-                            st.error(f"Verification failed.")
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+                            st.success("✅ Success! You can now scan your inbox."); st.rerun() 
+                    except Exception as e: st.error(f"Verification failed: {e}")
 
 # 2. RUN THE ENGINE
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
-        
-        # --- CALCULATE THE EXACT DATETIME BOUNDARIES ---
         if filter_type == "Recent Window":
-            time_delta = get_timedelta(selected_time)
             end_dt = datetime.now()
-            start_dt = end_dt - time_delta
+            start_dt = end_dt - get_timedelta(selected_time)
             status_text = f"Mining Resumes from the last {selected_time}..."
         else:
-            # Convert user calendar dates into strict start-of-day and end-of-day timestamps
             start_dt = datetime.combine(start_date, datetime.min.time())
             end_dt = datetime.combine(end_date, datetime.max.time())
             status_text = f"Mining Resumes from {start_date} to {end_date}..."
         
         if provider == "Gmail (Personal/App Password)":
-            if not email_user or not email_pass:
-                st.error("Credentials required.")
+            if not email_user or not email_pass: st.error("Credentials required.")
             else:
                 with st.spinner(status_text):
                     cands, stat = run_gmail_scan(email_user, email_pass, start_dt, end_dt, jd, api_key, ai_choice)
-                    st.session_state.scanned_candidates = cands
-                    st.session_state.scan_status = stat
-        
+                    st.session_state.scanned_candidates = cands; st.session_state.scan_status = stat
         elif provider == "Outlook / Office 365 (Corporate)":
             with st.spinner(status_text):
                 cands, stat = run_outlook_scan(outlook_account, start_dt, end_dt, jd, api_key, ai_choice)
-                st.session_state.scanned_candidates = cands
-                st.session_state.scan_status = stat
+                st.session_state.scanned_candidates = cands; st.session_state.scan_status = stat
 
 # 3. DISPLAY RESULTS
 if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
@@ -431,36 +419,14 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
     display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
 
     top_col1, top_col2 = st.columns([3, 1])
-    with top_col1:
-        st.success(f"✅ Found {len(display_cands)} Candidates")
+    with top_col1: st.success(f"✅ Found {len(display_cands)} Candidates")
     with top_col2:
-        export_df = pd.DataFrame([{
-            "Score (%)": c.get('Match %', 0),
-            "Name": c.get('Name', 'N/A'),
-            "Phone": c.get('Phone', 'N/A'),
-            "Email": c.get('Email', 'N/A'),
-            "Experience": c.get('Experience', 'N/A'),
-            "Skills": c.get('Skills', 'N/A')
-        } for c in display_cands])
-        csv_data = export_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📊 Download to Excel",
-            data=csv_data,
-            file_name=f"candidates_export_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-        
+        export_df = pd.DataFrame([{"Score (%)": c.get('Match %', 0), "Name": c.get('Name', 'N/A'), "Phone": c.get('Phone', 'N/A'), "Email": c.get('Email', 'N/A'), "Experience": c.get('Experience', 'N/A'), "Skills": c.get('Skills', 'N/A')} for c in display_cands])
+        st.download_button(label="📊 Download to Excel", data=export_df.to_csv(index=False).encode('utf-8'), file_name=f"candidates_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True)
     st.divider()
 
     h1, h2, h3, h4, h5, h6, h7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
-    h1.markdown("**Score**")
-    h2.markdown("**Name**")
-    h3.markdown("**Phone**")
-    h4.markdown("**Email**")
-    h5.markdown("**Skills**")
-    h6.markdown("**Exp**")
-    h7.markdown("**Resume**")
+    h1.markdown("**Score**"); h2.markdown("**Name**"); h3.markdown("**Phone**"); h4.markdown("**Email**"); h5.markdown("**Skills**"); h6.markdown("**Exp**"); h7.markdown("**Resume**")
     st.markdown("---")
 
     for i, c in enumerate(display_cands):
@@ -471,14 +437,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
         with col4: st.caption(c.get('Email', 'N/A'))
         with col5: st.caption(c.get('Skills', 'N/A'))
         with col6: st.write(c.get('Experience', 'N/A'))
-        with col7:
-            st.download_button(
-                label="📥 PDF", 
-                data=c['Bytes'], 
-                file_name=c['Filename'], 
-                mime="application/octet-stream", 
-                key=f"dl_{i}_{c['Filename']}"
-            )
+        with col7: st.download_button(label="📥 PDF", data=c['Bytes'], file_name=c['Filename'], mime="application/octet-stream", key=f"dl_{i}_{c['Filename']}")
         st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
