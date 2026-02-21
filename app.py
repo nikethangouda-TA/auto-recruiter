@@ -247,5 +247,150 @@ def run_outlook_scan(account_obj, days, jd_text, current_key, current_engine):
                 
             for att in msg.attachments:
                 if att.name and att.name.lower().endswith(('.pdf', '.docx')):
-                    file_bytes = getattr(att, 'content'),
+                    file_bytes = getattr(att, 'content', None)
+                    if file_bytes:
+                        if isinstance(file_bytes, str):
+                            file_bytes = file_bytes.encode('utf-8', errors='ignore')
+                            
+                        content = read_file_content(file_bytes, att.name)
+                        
+                        if len(content) > 5: 
+                            meta = extract_details(content, jd_text, current_key, current_engine)
+                            
+                            candidates.append({
+                                "Name": meta.get("Name", "Candidate"),
+                                "Email": meta.get("Email", "N/A"),
+                                "Phone": meta.get("Phone", "N/A"),
+                                "Experience": meta.get("Experience", "N/A"),
+                                "Skills": meta.get("Skills", "N/A"),
+                                "Match %": meta.get("Match %", 0),
+                                "Filename": att.name,
+                                "Bytes": file_bytes,
+                                "text": content
+                            })
+                            
+    status_text.empty()
+    if len(candidates) == 0:
+        return [], f"Done! Scanned {processed} emails, but found 0 resumes in the last {days} days."
+    return candidates, "Success"
 
+# --- MAIN LOGIC & UI FLOW ---
+is_ready_to_scan = True
+outlook_account = None
+
+if provider == "Outlook / Office 365 (Corporate)":
+    if client_id and client_secret:
+        if "o365_account" not in st.session_state:
+            st.session_state.o365_account = Account((client_id, client_secret))
+            
+        outlook_account = st.session_state.o365_account
+        
+        if not outlook_account.is_authenticated:
+            is_ready_to_scan = False
+            if "o365_auth_flow" not in st.session_state:
+                scopes = ['https://graph.microsoft.com/User.Read', 'https://graph.microsoft.com/Mail.Read']
+                flow = outlook_account.con.msal_client.initiate_auth_code_flow(
+                    scopes=scopes, 
+                    redirect_uri='http://localhost:8501'
+                )
+                st.session_state.o365_auth_flow = flow
+            
+            st.warning("⚠️ Outlook Authentication Required")
+            st.markdown(f"**Step 1:** [👉 Click here to authorize the App]({st.session_state.o365_auth_flow['auth_uri']})", unsafe_allow_html=True)
+            
+            with st.form("auth_form"):
+                result_url = st.text_input("**Step 2:** Paste the localhost URL from the blank page here:")
+                submitted = st.form_submit_button("Verify Connection")
+                if submitted and result_url:
+                    try:
+                        query_params = dict(parse_qsl(urlparse(result_url).query))
+                        result = outlook_account.con.msal_client.acquire_token_by_auth_code_flow(
+                            auth_code_flow=st.session_state.o365_auth_flow,
+                            auth_response=query_params
+                        )
+                        if "access_token" in result:
+                            outlook_account.con.token_backend.token = result
+                            outlook_account.con.token_backend.save_token()
+                            st.success("✅ Success! You can now scan your inbox.")
+                            st.rerun() 
+                        else:
+                            st.error(f"Verification failed.")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+# 2. RUN THE ENGINE
+if is_ready_to_scan:
+    if st.button("🚀 Start Recruiter Engine"):
+        if provider == "Gmail (Personal/App Password)":
+            if not email_user or not email_pass:
+                st.error("Credentials required.")
+            else:
+                with st.spinner("Connecting to Gmail..."):
+                    cands, stat = run_gmail_scan(email_user, email_pass, days_back, jd, api_key, ai_choice)
+                    st.session_state.scanned_candidates = cands
+                    st.session_state.scan_status = stat
+        
+        elif provider == "Outlook / Office 365 (Corporate)":
+            with st.spinner("Mining Outlook Resumes..."):
+                cands, stat = run_outlook_scan(outlook_account, days_back, jd, api_key, ai_choice)
+                st.session_state.scanned_candidates = cands
+                st.session_state.scan_status = stat
+
+# 3. DISPLAY RESULTS
+if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
+    display_cands = st.session_state.scanned_candidates
+    display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
+
+    top_col1, top_col2 = st.columns([3, 1])
+    with top_col1:
+        st.success(f"✅ Found {len(display_cands)} Candidates")
+    with top_col2:
+        export_df = pd.DataFrame([{
+            "Score (%)": c.get('Match %', 0),
+            "Name": c.get('Name', 'N/A'),
+            "Phone": c.get('Phone', 'N/A'),
+            "Email": c.get('Email', 'N/A'),
+            "Experience": c.get('Experience', 'N/A'),
+            "Skills": c.get('Skills', 'N/A')
+        } for c in display_cands])
+        csv_data = export_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📊 Download to Excel",
+            data=csv_data,
+            file_name=f"candidates_export_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+    st.divider()
+
+    h1, h2, h3, h4, h5, h6, h7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
+    h1.markdown("**Score**")
+    h2.markdown("**Name**")
+    h3.markdown("**Phone**")
+    h4.markdown("**Email**")
+    h5.markdown("**Skills**")
+    h6.markdown("**Exp**")
+    h7.markdown("**Resume**")
+    st.markdown("---")
+
+    for c in display_cands:
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
+        with col1: st.write(f"**{c.get('Match %', 0)}%**")
+        with col2: st.write(c.get('Name', 'N/A'))
+        with col3: st.write(c.get('Phone', 'N/A'))
+        with col4: st.caption(c.get('Email', 'N/A'))
+        with col5: st.caption(c.get('Skills', 'N/A'))
+        with col6: st.write(c.get('Experience', 'N/A'))
+        with col7:
+            st.download_button(
+                label="📥 PDF", 
+                data=c['Bytes'], 
+                file_name=c['Filename'], 
+                mime="application/octet-stream", 
+                key=f"dl_{c['Filename']}"
+            )
+        st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
+
+elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
+    st.warning(st.session_state.scan_status)
