@@ -26,42 +26,82 @@ except ImportError:
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide", initial_sidebar_state="collapsed")
 
-# --- 2026 SaaS CSS INJECTION ---
+# --- ENTERPRISE SAAS CSS INJECTION ---
 st.markdown("""
 <style>
-    /* Sleek Dark Background */
+    /* Deep Corporate Slate Background */
     .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #000000 100%);
-        color: #f8fafc;
+        background-color: #0B1120;
+        color: #F8FAFC;
     }
     
-    /* Glowing Title */
+    /* Elegant Title */
     .saas-title {
-        font-size: 4rem;
+        font-size: 3.5rem;
         font-weight: 800;
-        background: linear-gradient(to right, #38bdf8, #818cf8, #c084fc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #FFFFFF;
         text-align: center;
         margin-bottom: 0px;
         padding-bottom: 0px;
+        letter-spacing: -1px;
     }
     
+    /* Professional Subtitle */
     .saas-subtitle {
         text-align: center;
-        font-size: 1.2rem;
-        color: #94a3b8;
+        font-size: 1.1rem;
+        color: #94A3B8;
         margin-bottom: 40px;
+        font-weight: 400;
     }
     
-    /* Glassmorphism Cards for Auth */
+    /* Frosted Glass Auth Card */
     .auth-card {
-        background: rgba(30, 41, 59, 0.7);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 15px;
-        padding: 30px;
-        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        background: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 40px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+    
+    /* Override Streamlit Default Red Primary Button to Enterprise Blue */
+    [data-testid="stButton"] button[data-baseweb="button"] {
+        background-color: #2563EB !important; /* Trust Blue */
+        color: white !important;
+        border: none !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s ease-in-out;
+    }
+    
+    /* Button Hover Effect */
+    [data-testid="stButton"] button[data-baseweb="button"]:hover {
+        background-color: #1D4ED8 !important; /* Darker Blue */
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4) !important;
+    }
+    
+    /* Override Streamlit Text Inputs */
+    [data-testid="stTextInput"] div[data-baseweb="input"] {
+        background-color: #0F172A;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        color: white;
+    }
+    
+    /* Clean up Tabs */
+    [data-testid="stTabs"] button {
+        color: #94A3B8 !important;
+    }
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        color: #FFFFFF !important;
+        border-bottom-color: #2563EB !important;
+    }
+    
+    /* Clean Success/Warning Banners */
+    [data-testid="stNotification"] {
+        background-color: #1E293B !important;
+        border: 1px solid #334155 !important;
+        color: #F8FAFC !important;
     }
     
     /* Hide the top header line */
@@ -85,7 +125,7 @@ supabase = init_supabase()
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
 if 'awaiting_otp' not in st.session_state: st.session_state.awaiting_otp = False
-if 'signup_email_temp' not in st.session_state: st.session_state.signup_email_temp = ""
+if 'temp_signup_email' not in st.session_state: st.session_state.temp_signup_email = ""
 
 # --- THE LANDING PAGE (If not logged in) ---
 if not st.session_state.authenticated:
@@ -97,90 +137,95 @@ if not st.session_state.authenticated:
         st.error("⚠️ Database connection missing. Please configure Supabase in Streamlit Secrets.")
         st.stop()
         
-    # Center the auth boxes
     spacer1, col_auth, spacer2 = st.columns([1, 2, 1])
     
     with col_auth:
         st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
         
-        # TABBED UI for Login vs Signup
-        tab1, tab2 = st.tabs(["🔒 Log In", "🚀 Create Account"])
+        tab1, tab2 = st.tabs(["🔒 Secure Log In", "🚀 Request Access"])
         
+        # --- LOGIN TAB ---
         with tab1:
-            st.markdown("### Welcome Back")
+            st.write("") # Spacing
             login_email = st.text_input("Work Email", key="log_email")
             login_password = st.text_input("Password", type="password", key="log_pwd")
-            if st.button("Access Dashboard", use_container_width=True):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
-                    st.session_state.authenticated = True
-                    st.session_state.user_email = login_email
-                    st.rerun()
-                except Exception as e:
-                    st.error("Invalid credentials or email not verified.")
+            st.write("") # Spacing
+            if st.button("Access Dashboard", use_container_width=True, type="primary"):
+                if not login_email or not login_password:
+                    st.error("Please enter both email and password.")
+                else:
+                    try:
+                        res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                        st.session_state.authenticated = True
+                        st.session_state.user_email = login_email
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Invalid credentials or email not verified.")
 
+        # --- SIGNUP & OTP TAB ---
         with tab2:
+            st.write("") # Spacing
             if not st.session_state.awaiting_otp:
-                st.markdown("### Request Access")
                 signup_email = st.text_input("Work Email *", key="reg_email")
-                signup_phone = st.text_input("Mobile Number * (Required for verification)", key="reg_phone")
+                signup_phone = st.text_input("Mobile Number *", key="reg_phone")
                 signup_password = st.text_input("Create Password *", type="password", key="reg_pwd")
+                st.write("") # Spacing
                 
                 if st.button("Create Account & Send OTP", use_container_width=True, type="primary"):
-                    if not signup_email or not signup_phone or not signup_password:
-                        st.error("⚠️ All fields (Email, Phone, Password) are mandatory.")
+                    if not signup_email or not signup_password or not signup_phone:
+                        st.error("⚠️ Email, Phone, and Password are all required.")
                     else:
                         try:
-                            # Sign up and save phone number to user metadata
                             res = supabase.auth.sign_up({
                                 "email": signup_email, 
                                 "password": signup_password,
                                 "options": {"data": {"phone_number": signup_phone}}
                             })
+                            st.session_state.temp_signup_email = signup_email
                             st.session_state.awaiting_otp = True
-                            st.session_state.signup_email_temp = signup_email
                             st.rerun()
                         except Exception as e:
                             st.error(f"Sign up failed: {e}")
             
             else:
-                # OTP Verification Screen
-                st.markdown(f"### 🔐 Check your email")
-                st.success(f"We sent a 6-digit OTP code to **{st.session_state.signup_email_temp}**")
-                otp_code = st.text_input("Enter 6-Digit OTP Code")
+                # --- OTP VERIFICATION SCREEN ---
+                st.info(f"📩 We sent a 6-digit secure code to **{st.session_state.temp_signup_email}**")
                 
-                if st.button("Verify & Login", use_container_width=True, type="primary"):
-                    try:
-                        res = supabase.auth.verify_otp({
-                            "email": st.session_state.signup_email_temp,
-                            "token": otp_code,
-                            "type": "signup"
-                        })
-                        st.session_state.authenticated = True
-                        st.session_state.user_email = st.session_state.signup_email_temp
-                        st.session_state.awaiting_otp = False
-                        st.rerun()
-                    except Exception as e:
-                        st.error("Invalid or expired OTP code. Please try again.")
-                        
-                if st.button("Cancel / Go Back", use_container_width=True):
+                otp_code = st.text_input("Enter 6-Digit OTP Code")
+                st.write("") # Spacing
+                
+                if st.button("Verify Identity & Login", use_container_width=True, type="primary"):
+                    if not otp_code:
+                        st.error("Please enter the OTP code.")
+                    else:
+                        try:
+                            res = supabase.auth.verify_otp({
+                                "email": st.session_state.temp_signup_email,
+                                "token": otp_code,
+                                "type": "signup"
+                            })
+                            st.session_state.authenticated = True
+                            st.session_state.user_email = st.session_state.temp_signup_email
+                            st.session_state.awaiting_otp = False
+                            st.rerun()
+                        except Exception as e:
+                            st.error("Invalid or expired OTP code. Please try again.")
+                            
+                if st.button("Cancel", use_container_width=True):
                     st.session_state.awaiting_otp = False
+                    st.session_state.temp_signup_email = ""
                     st.rerun()
                     
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Stop the app right here so they cannot see the engine!
     st.stop()
-
 
 # ==========================================
 # --- SECURE AREA: MAIN APP LOGIC BELOW ---
 # ==========================================
 
-# Force sidebar open when logged in
 st.set_option('client.showSidebarNavigation', True)
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.success(f"👤 {st.session_state.user_email}")
     if st.button("🚪 Log Out", use_container_width=True):
@@ -250,7 +295,6 @@ with st.sidebar:
 
 st.title("🏢 Auto Recruiter: Dashboard")
 
-# --- TIME CONVERTER HELPER ---
 def get_timedelta(selection):
     val = int(selection.split()[0])
     unit = selection.split()[1].lower()
@@ -261,7 +305,6 @@ def get_timedelta(selection):
     elif "month" in unit: return timedelta(days=val * 30)
     return timedelta(days=1)
 
-# --- SHARED HELPERS ---
 def extract_details(text, jd_text, key, ai_engine):
     if key:
         prompt = f"""
@@ -321,7 +364,6 @@ def extract_details(text, jd_text, key, ai_engine):
                     st.toast(f"AI Error: {e}")
                     break 
 
-    # --- DUMB REGEX FALLBACK ---
     details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
     phone_pattern = r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]'
     phones = re.findall(phone_pattern, text)
@@ -359,7 +401,6 @@ def decode_fname(header_val):
         else: filename += text
     return filename
 
-# --- GMAIL ENGINE ---
 def run_gmail_scan(user, password, start_dt, end_dt, jd_text, current_key, current_engine):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try: mail.login(user, password)
@@ -408,7 +449,6 @@ def run_gmail_scan(user, password, start_dt, end_dt, jd_text, current_key, curre
     mail.logout()
     return candidates, "Success"
 
-# --- OUTLOOK ENGINE ---
 def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, current_engine):
     if not account_obj.is_authenticated: return [], "Please authenticate with Outlook first."
     inbox = account_obj.mailbox().inbox_folder()
@@ -447,7 +487,6 @@ def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, curren
     if len(candidates) == 0: return [], f"Done! Scanned {processed} emails, but found 0 resumes."
     return candidates, "Success"
 
-# --- MAIN LOGIC & UI FLOW ---
 is_ready_to_scan = True
 outlook_account = None
 
@@ -474,7 +513,6 @@ if provider == "Outlook / Office 365 (Corporate)":
                             st.success("✅ Success! You can now scan your inbox."); st.rerun() 
                     except Exception as e: st.error(f"Verification failed: {e}")
 
-# 2. RUN THE ENGINE
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
         if filter_type == "Recent Window":
@@ -497,7 +535,6 @@ if is_ready_to_scan:
                 cands, stat = run_outlook_scan(outlook_account, start_dt, end_dt, jd, api_key, ai_choice)
                 st.session_state.scanned_candidates = cands; st.session_state.scan_status = stat
 
-# 3. DISPLAY RESULTS
 if "scanned_candidates" in st.session_state and st.session_state.scanned_candidates:
     display_cands = st.session_state.scanned_candidates
     display_cands.sort(key=lambda x: x.get("Match %", 0), reverse=True)
