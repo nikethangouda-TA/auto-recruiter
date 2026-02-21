@@ -93,7 +93,7 @@ def extract_details(text, jd_text, key, ai_engine):
         try:
             if "Gemini" in ai_engine:
                 genai.configure(api_key=key)
-                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+               model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
                 response = model.generate_content(prompt)
                 data = json.loads(response.text)
             else:
@@ -394,3 +394,4 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
