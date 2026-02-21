@@ -44,16 +44,28 @@ with st.sidebar:
 
     st.header("2. Settings")
     
-    # --- THE NEW PRECISION TIME DROPDOWN ---
-    time_options = [
-        "5 Minutes", "15 Minutes", "30 Minutes", "45 Minutes", 
-        "1 Hour", "2 Hours", "4 Hours", "6 Hours", "8 Hours", "9 Hours", "10 Hours", "12 Hours", "24 Hours",
-        "1 Day", "2 Days", "3 Days", "4 Days", "5 Days", "6 Days", "7 Days",
-        "1 Week", "2 Weeks", "3 Weeks", "4 Weeks",
-        "1 Month", "2 Months", "3 Months", "4 Months", "5 Months", "6 Months", 
-        "7 Months", "8 Months", "9 Months", "10 Months", "11 Months", "12 Months"
-    ]
-    selected_time = st.selectbox("Look back time:", time_options, index=13) # Defaults to "1 Day"
+    # --- THE NEW DUAL TIME FILTER ---
+    filter_type = st.radio("Time Filter Type:", ["Recent Window", "Specific Date Range"])
+    
+    selected_time = None
+    start_date = None
+    end_date = None
+    
+    if filter_type == "Recent Window":
+        time_options = [
+            "5 Minutes", "15 Minutes", "30 Minutes", "45 Minutes", 
+            "1 Hour", "2 Hours", "4 Hours", "6 Hours", "8 Hours", "9 Hours", "10 Hours", "12 Hours", "24 Hours",
+            "1 Day", "2 Days", "3 Days", "4 Days", "5 Days", "6 Days", "7 Days",
+            "1 Week", "2 Weeks", "3 Weeks", "4 Weeks",
+            "1 Month", "2 Months", "3 Months", "4 Months", "5 Months", "6 Months", 
+            "7 Months", "8 Months", "9 Months", "10 Months", "11 Months", "12 Months"
+        ]
+        selected_time = st.selectbox("Look back time:", time_options, index=13) # Defaults to "1 Day"
+    else:
+        # Two elegant calendar widgets side-by-side
+        c1, c2 = st.columns(2)
+        with c1: start_date = st.date_input("From Date", value=datetime.today() - timedelta(days=7))
+        with c2: end_date = st.date_input("To Date", value=datetime.today())
     
     st.header("3. Job Description")
     jd = st.text_area("JD for Ranking:", height=150, placeholder="Paste JD here (e.g. Python, AWS, 5+ years...)")
@@ -100,7 +112,6 @@ def get_timedelta(selection):
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text, key, ai_engine):
-    # --- SMART AI EXTRACTION WITH BACKOFF ---
     if key:
         prompt = f"""
         You are an expert IT Recruiter. Extract candidate details from the following resume text.
@@ -213,7 +224,7 @@ def decode_fname(header_val):
     return filename
 
 # --- GMAIL ENGINE ---
-def run_gmail_scan(user, password, time_delta, jd_text, current_key, current_engine):
+def run_gmail_scan(user, password, start_dt, end_dt, jd_text, current_key, current_engine):
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
     try:
         mail.login(user, password)
@@ -222,12 +233,11 @@ def run_gmail_scan(user, password, time_delta, jd_text, current_key, current_eng
 
     mail.select("INBOX")
     
-    # Calculate exact precise minute to look back to
-    precise_since_date = datetime.now() - time_delta
-    # Cast a wider 1-day net for the IMAP server search so we don't miss midnight rollover emails
-    imap_search_date = (precise_since_date - timedelta(days=1)).strftime("%Y/%m/%d")
+    # IMAP requires date strings for its rough search (expanding the net by 1 day to be safe with timezones)
+    imap_after = (start_dt - timedelta(days=1)).strftime("%Y/%m/%d")
+    imap_before = (end_dt + timedelta(days=2)).strftime("%Y/%m/%d")
     
-    search_cmd = f'(X-GM-RAW "filename:pdf OR filename:docx after:{imap_search_date}")'
+    search_cmd = f'(X-GM-RAW "(filename:pdf OR filename:docx) after:{imap_after} before:{imap_before}")'
     typ, data = mail.search(None, search_cmd)
     
     if not data[0]: return [], "No resumes found."
@@ -243,14 +253,16 @@ def run_gmail_scan(user, password, time_delta, jd_text, current_key, current_eng
             if isinstance(response_part, tuple):
                 msg = email.message_from_bytes(response_part[1])
                 
-                # EXACT MINUTE FILTER
+                # EXACT DATE & TIME FILTER
                 msg_date_header = msg.get("Date")
                 if msg_date_header:
                     try:
                         msg_date = parsedate_to_datetime(msg_date_header)
                         if msg_date.tzinfo: msg_date = msg_date.replace(tzinfo=None)
-                        if msg_date < precise_since_date:
-                            continue # Skip! This email arrived before our exact 5/15/30 minute window
+                        
+                        # If the email falls outside our precise boundary, skip it immediately!
+                        if msg_date < start_dt or msg_date > end_dt:
+                            continue 
                     except:
                         pass
                 
@@ -279,14 +291,12 @@ def run_gmail_scan(user, password, time_delta, jd_text, current_key, current_eng
     return candidates, "Success"
 
 # --- OUTLOOK ENGINE ---
-def run_outlook_scan(account_obj, time_delta, jd_text, current_key, current_engine):
+def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, current_engine):
     if not account_obj.is_authenticated:
         return [], "Please authenticate with Outlook first."
         
     inbox = account_obj.mailbox().inbox_folder()
     
-    # Exact minute precision filter
-    since_date = datetime.now() - time_delta
     messages = inbox.get_messages(limit=2000) 
     
     candidates = []
@@ -301,8 +311,9 @@ def run_outlook_scan(account_obj, time_delta, jd_text, current_key, current_engi
         msg_date = getattr(msg, 'received', getattr(msg, 'created', None))
         if msg_date:
             msg_date = msg_date.replace(tzinfo=None)
-            if msg_date < since_date:
-                continue # Skip! Arrived before our exact window
+            # Exact boundary filter
+            if msg_date < start_dt or msg_date > end_dt:
+                continue 
                 
         if getattr(msg, 'has_attachments', False):
             try:
@@ -387,21 +398,30 @@ if provider == "Outlook / Office 365 (Corporate)":
 if is_ready_to_scan:
     if st.button("🚀 Start Recruiter Engine"):
         
-        # Convert the dropdown text into actual math
-        time_delta = get_timedelta(selected_time)
+        # --- CALCULATE THE EXACT DATETIME BOUNDARIES ---
+        if filter_type == "Recent Window":
+            time_delta = get_timedelta(selected_time)
+            end_dt = datetime.now()
+            start_dt = end_dt - time_delta
+            status_text = f"Mining Resumes from the last {selected_time}..."
+        else:
+            # Convert user calendar dates into strict start-of-day and end-of-day timestamps
+            start_dt = datetime.combine(start_date, datetime.min.time())
+            end_dt = datetime.combine(end_date, datetime.max.time())
+            status_text = f"Mining Resumes from {start_date} to {end_date}..."
         
         if provider == "Gmail (Personal/App Password)":
             if not email_user or not email_pass:
                 st.error("Credentials required.")
             else:
-                with st.spinner(f"Mining Resumes from the last {selected_time}..."):
-                    cands, stat = run_gmail_scan(email_user, email_pass, time_delta, jd, api_key, ai_choice)
+                with st.spinner(status_text):
+                    cands, stat = run_gmail_scan(email_user, email_pass, start_dt, end_dt, jd, api_key, ai_choice)
                     st.session_state.scanned_candidates = cands
                     st.session_state.scan_status = stat
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner(f"Mining Resumes from the last {selected_time}..."):
-                cands, stat = run_outlook_scan(outlook_account, time_delta, jd, api_key, ai_choice)
+            with st.spinner(status_text):
+                cands, stat = run_outlook_scan(outlook_account, start_dt, end_dt, jd, api_key, ai_choice)
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
 
