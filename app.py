@@ -24,85 +24,7 @@ except ImportError:
     pass
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide", initial_sidebar_state="expanded")
-
-# --- ENTERPRISE SAAS CSS INJECTION ---
-st.markdown("""
-<style>
-    /* Deep Corporate Slate Background */
-    .stApp {
-        background-color: #0B1120;
-        color: #F8FAFC;
-    }
-    
-    /* Elegant Title */
-    .saas-title {
-        font-size: 3.5rem;
-        font-weight: 800;
-        color: #FFFFFF;
-        text-align: center;
-        margin-bottom: 0px;
-        padding-bottom: 0px;
-        letter-spacing: -1px;
-    }
-    
-    /* Professional Subtitle */
-    .saas-subtitle {
-        text-align: center;
-        font-size: 1.1rem;
-        color: #94A3B8;
-        margin-bottom: 40px;
-        font-weight: 400;
-    }
-    
-    /* Frosted Glass Auth Card */
-    .auth-card {
-        background: #1E293B;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 40px;
-        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-    }
-    
-    /* FORCE Primary Buttons to be Enterprise Blue */
-    button[kind="primary"] {
-        background-color: #2563EB !important; 
-        color: white !important;
-        border-color: #2563EB !important;
-        border-radius: 6px !important;
-        font-weight: 600 !important;
-    }
-    
-    button[kind="primary"]:hover {
-        background-color: #1D4ED8 !important; 
-        border-color: #1D4ED8 !important;
-    }
-    
-    /* Regular Buttons */
-    button[kind="secondary"] {
-        border-color: #334155 !important;
-        color: #F8FAFC !important;
-    }
-    
-    /* Override Streamlit Text Inputs */
-    [data-testid="stTextInput"] div[data-baseweb="input"] {
-        background-color: #0F172A;
-        border: 1px solid #334155;
-        border-radius: 6px;
-        color: white;
-    }
-    
-    /* Clean up Tabs */
-    [data-testid="stTabs"] button {
-        color: #94A3B8 !important;
-    }
-    [data-testid="stTabs"] button[aria-selected="true"] {
-        color: #FFFFFF !important;
-        border-bottom-color: #2563EB !important;
-    }
-    
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide")
 
 # --- DATABASE & AUTH SETUP ---
 @st.cache_resource
@@ -121,50 +43,110 @@ if 'authenticated' not in st.session_state: st.session_state.authenticated = Fal
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
 if 'awaiting_otp' not in st.session_state: st.session_state.awaiting_otp = False
 if 'temp_signup_email' not in st.session_state: st.session_state.temp_signup_email = ""
+if 'reset_flow' not in st.session_state: st.session_state.reset_flow = False
+if 'reset_sent' not in st.session_state: st.session_state.reset_sent = False
+if 'reset_email' not in st.session_state: st.session_state.reset_email = ""
 
+# ==========================================
 # --- THE LANDING PAGE (If not logged in) ---
+# ==========================================
 if not st.session_state.authenticated:
     
-    st.markdown("<h1 class='saas-title'>Auto Recruiter</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='saas-subtitle'>The AI-Powered Bulk Resume Engine for Enterprise Staffing</p>", unsafe_allow_html=True)
+    st.title("🏢 Auto Recruiter")
+    st.subheader("The AI-Powered Bulk Resume Engine for Enterprise Staffing")
+    st.divider()
     
     if supabase is None:
         st.error("⚠️ Database connection missing. Please configure Supabase in Streamlit Secrets.")
         st.stop()
         
-    spacer1, col_auth, spacer2 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     
-    with col_auth:
-        st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
-        
+    with col2:
         tab1, tab2 = st.tabs(["🔒 Secure Log In", "🚀 Request Access"])
         
-        # --- LOGIN TAB ---
+        # --- LOGIN & PASSWORD RESET TAB ---
         with tab1:
-            st.write("") 
-            login_email = st.text_input("Work Email", key="log_email")
-            login_password = st.text_input("Password", type="password", key="log_pwd")
-            st.write("") 
-            if st.button("Access Dashboard", use_container_width=True, type="primary"):
-                if not login_email or not login_password:
-                    st.error("Please enter both email and password.")
-                else:
-                    try:
-                        res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
-                        st.session_state.authenticated = True
-                        st.session_state.user_email = login_email
+            if not st.session_state.reset_flow:
+                st.write("### Welcome Back")
+                login_email = st.text_input("Work Email", key="log_email")
+                login_password = st.text_input("Password", type="password", key="log_pwd")
+                
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    if st.button("Access Dashboard", use_container_width=True, type="primary"):
+                        if not login_email or not login_password:
+                            st.error("Please enter both email and password.")
+                        else:
+                            try:
+                                res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                                st.session_state.authenticated = True
+                                st.session_state.user_email = login_email
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Invalid credentials or email not verified.")
+                with col_btn2:
+                    if st.button("Forgot Password?", use_container_width=True):
+                        st.session_state.reset_flow = True
                         st.rerun()
-                    except Exception as e:
-                        st.error("Invalid credentials or email not verified.")
+            else:
+                # --- FORGOT PASSWORD SCREEN ---
+                st.write("### Reset Password")
+                if not st.session_state.reset_sent:
+                    reset_email_input = st.text_input("Enter your Work Email", key="reset_em")
+                    
+                    if st.button("Send 6-Digit Reset Code", use_container_width=True, type="primary"):
+                        if reset_email_input:
+                            try:
+                                supabase.auth.reset_password_for_email(reset_email_input)
+                                st.session_state.reset_email = reset_email_input
+                                st.session_state.reset_sent = True
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            st.error("Please enter an email address.")
+                            
+                    if st.button("Back to Login", use_container_width=True):
+                        st.session_state.reset_flow = False
+                        st.rerun()
+                else:
+                    # --- ENTER RESET OTP & NEW PASSWORD ---
+                    st.info(f"📩 Sent reset code to **{st.session_state.reset_email}**")
+                    reset_code = st.text_input("Enter 6-Digit Code")
+                    new_pwd = st.text_input("Create New Password", type="password")
+                    
+                    if st.button("Update Password & Login", use_container_width=True, type="primary"):
+                        if not reset_code or not new_pwd:
+                            st.error("Please enter the code and a new password.")
+                        else:
+                            try:
+                                # 1. Verify the OTP code for recovery
+                                supabase.auth.verify_otp({"email": st.session_state.reset_email, "token": reset_code, "type": "recovery"})
+                                # 2. Immediately update to the new password
+                                supabase.auth.update_user({"password": new_pwd})
+                                
+                                st.session_state.authenticated = True
+                                st.session_state.user_email = st.session_state.reset_email
+                                st.session_state.reset_flow = False
+                                st.session_state.reset_sent = False
+                                st.success("Password updated successfully!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Invalid code. Please try again.")
+                                
+                    if st.button("Cancel", use_container_width=True):
+                        st.session_state.reset_flow = False
+                        st.session_state.reset_sent = False
+                        st.rerun()
 
         # --- SIGNUP & OTP TAB ---
         with tab2:
-            st.write("") 
             if not st.session_state.awaiting_otp:
+                st.write("### Create Account")
                 signup_email = st.text_input("Work Email *", key="reg_email")
                 signup_phone = st.text_input("Mobile Number *", key="reg_phone")
                 signup_password = st.text_input("Create Password *", type="password", key="reg_pwd")
-                st.write("") 
                 
                 if st.button("Create Account & Send OTP", use_container_width=True, type="primary"):
                     if not signup_email or not signup_password or not signup_phone:
@@ -184,10 +166,10 @@ if not st.session_state.authenticated:
             
             else:
                 # --- OTP VERIFICATION SCREEN ---
-                st.info(f"📩 We sent a 6-digit secure code to **{st.session_state.temp_signup_email}**")
+                st.write("### 🔐 Verify Identity")
+                st.info(f"We sent a 6-digit secure code to **{st.session_state.temp_signup_email}**")
                 
                 otp_code = st.text_input("Enter 6-Digit OTP Code")
-                st.write("") 
                 
                 if st.button("Verify Identity & Login", use_container_width=True, type="primary"):
                     if not otp_code:
@@ -210,8 +192,6 @@ if not st.session_state.authenticated:
                     st.session_state.awaiting_otp = False
                     st.session_state.temp_signup_email = ""
                     st.rerun()
-                    
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.stop()
 
@@ -480,7 +460,6 @@ def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, curren
     if len(candidates) == 0: return [], f"Done! Scanned {processed} emails, but found 0 resumes."
     return candidates, "Success"
 
-# --- THE MISSING VARIABLES ---
 is_ready_to_scan = True
 outlook_account = None
 
