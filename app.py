@@ -7,8 +7,10 @@ import io
 import re
 import base64
 import json
+import google.generativeai as genai
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qsl
+
 
 # To prevent crashes if these aren't installed yet
 try:
@@ -16,6 +18,7 @@ try:
     import docx
     from O365 import Account
     from openai import OpenAI
+   
 except ImportError:
     pass
 
@@ -65,32 +68,40 @@ with st.sidebar:
     api_key = st.text_input(f"Paste your {ai_choice.split()[0]} Key here:", type="password")
 
 # --- SHARED HELPERS ---
-def extract_details(text, jd_text, api_key=None):
-    # --- SMART LLM EXTRACTION ---
-    if api_key:
+def extract_details(text, jd_text, key=None, ai_engine="Gemini"):
+    # --- DUAL AI LLM EXTRACTION ---
+    if key:
+        prompt = f"""
+        You are an expert IT Recruiter. Extract candidate details from the following resume text.
+        
+        Job Description: {jd_text if jd_text else 'None provided.'}
+        
+        Resume Text: {text[:6000]} 
+        
+        Respond STRICTLY with a valid JSON object containing exactly these keys:
+        "Name": (String, candidate's full name, or "N/A"),
+        "Email": (String, or "N/A"),
+        "Phone": (String, or "N/A"),
+        "Experience": (String, calculate total years of relevant experience, e.g., "7 Years", or "N/A"),
+        "Skills": (String, comma-separated list of the top 5-7 skills matching the JD. "N/A" if no JD),
+        "Match": (Integer, 0 to 100 score of how well the candidate fits the Job Description. Return 0 if no JD).
+        """
+        
         try:
-            client = OpenAI(api_key=api_key)
-            prompt = f"""
-            You are an expert IT Recruiter. Extract candidate details from the following resume text.
+            if "Gemini" in ai_engine:
+                genai.configure(api_key=key)
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+                response = model.generate_content(prompt)
+                data = json.loads(response.text)
+            else:
+                client = OpenAI(api_key=key)
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={ "type": "json_object" } 
+                )
+                data = json.loads(response.choices[0].message.content)
             
-            Job Description: {jd_text if jd_text else 'None provided.'}
-            
-            Resume Text: {text[:6000]} 
-            
-            Respond STRICTLY with a valid JSON object containing exactly these keys:
-            "Name": (String, candidate's full name, or "N/A"),
-            "Email": (String, or "N/A"),
-            "Phone": (String, or "N/A"),
-            "Experience": (String, calculate total years of relevant experience, e.g., "7 Years", or "N/A"),
-            "Skills": (String, comma-separated list of the top 5-7 skills matching the JD. "N/A" if no JD),
-            "Match": (Integer, 0 to 100 score of how well the candidate fits the Job Description. Return 0 if no JD provided).
-            """
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" } 
-            )
-            data = json.loads(response.choices[0].message.content)
             return {
                 "Name": data.get("Name", "N/A"),
                 "Email": data.get("Email", "N/A"),
@@ -99,9 +110,34 @@ def extract_details(text, jd_text, api_key=None):
                 "Skills": str(data.get("Skills", "N/A")),
                 "Match %": int(data.get("Match", 0)) 
             }
-        except Exception:
-            pass # Fallback to regex if API fails
+        except Exception as e:
+            st.toast(f"{ai_engine.split()[0]} Error: {e}")
+            pass # Fallback to regex below if API fails
 
+    # --- DUMB REGEX FALLBACK ---
+    details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
+    
+    phone_pattern = r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]'
+    phones = re.findall(phone_pattern, text)
+    if phones:
+        valid_phones = [p for p in phones if len(re.sub(r'\D', '', p)) > 9]
+        if valid_phones: details["Phone"] = valid_phones[0]
+
+    email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+    emails = re.findall(email_pattern, text)
+    if emails: 
+        details["Email"] = emails[0]
+        details["Name"] = emails[0].split('@')[0]
+
+    exp_pattern = r'(\d+)\+?\s*years?'
+    exps = re.findall(exp_pattern, text.lower())
+    if exps:
+        try:
+            years = [int(x) for x in exps]
+            details["Experience"] = f"{max(years)} Years"
+        except Exception: pass
+
+    return details
     # --- DUMB REGEX FALLBACK ---
     details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
     
@@ -184,7 +220,7 @@ def run_gmail_scan(user, password, days, jd_text):
                                 if filename.lower().endswith(('.pdf', '.docx')):
                                     content = read_file_content(part.get_payload(decode=True), filename)
                                     if len(content) > 20:
-                                        meta = extract_details(content, jd_text, openai_api_key)
+                                       meta = extract_details(content, jd_text, api_key, ai_choice)
                                         candidates.append({
                                             "Name": meta.get("Name", "Candidate"),
                                             "Email": meta.get("Email", "N/A"),
@@ -240,7 +276,7 @@ def run_outlook_scan(account_obj, days, jd_text):
                         content = read_file_content(file_bytes, att.name)
                         
                         if len(content) > 5: 
-                            meta = extract_details(content, jd_text, openai_api_key)
+                          meta = extract_details(content, jd_text, api_key, ai_choice)
                             
                             candidates.append({
                                 "Name": meta.get("Name", "Candidate"),
@@ -382,5 +418,6 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
 
