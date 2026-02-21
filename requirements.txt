@@ -7,3 +7,5 @@ O365
 openai
 google-generativeai
 anthropic
+supabase
+
