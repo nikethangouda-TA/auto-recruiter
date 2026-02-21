@@ -480,6 +480,10 @@ def run_outlook_scan(account_obj, start_dt, end_dt, jd_text, current_key, curren
     if len(candidates) == 0: return [], f"Done! Scanned {processed} emails, but found 0 resumes."
     return candidates, "Success"
 
+# --- THE MISSING VARIABLES ---
+is_ready_to_scan = True
+outlook_account = None
+
 if provider == "Outlook / Office 365 (Corporate)":
     if client_id and client_secret:
         if "o365_account" not in st.session_state: st.session_state.o365_account = Account((client_id, client_secret))
