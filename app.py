@@ -24,7 +24,50 @@ except ImportError:
     pass
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide")
+st.set_page_config(page_title="Auto Recruiter: Enterprise", layout="wide", initial_sidebar_state="collapsed")
+
+# --- 2026 SaaS CSS INJECTION ---
+st.markdown("""
+<style>
+    /* Sleek Dark Background */
+    .stApp {
+        background: linear-gradient(135deg, #0f172a 0%, #000000 100%);
+        color: #f8fafc;
+    }
+    
+    /* Glowing Title */
+    .saas-title {
+        font-size: 4rem;
+        font-weight: 800;
+        background: linear-gradient(to right, #38bdf8, #818cf8, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        margin-bottom: 0px;
+        padding-bottom: 0px;
+    }
+    
+    .saas-subtitle {
+        text-align: center;
+        font-size: 1.2rem;
+        color: #94a3b8;
+        margin-bottom: 40px;
+    }
+    
+    /* Glassmorphism Cards for Auth */
+    .auth-card {
+        background: rgba(30, 41, 59, 0.7);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        padding: 30px;
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+    }
+    
+    /* Hide the top header line */
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 # --- DATABASE & AUTH SETUP ---
 @st.cache_resource
@@ -38,68 +81,109 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Initialize session state for auth
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'user_email' not in st.session_state:
-    st.session_state.user_email = ""
+# Initialize session states
+if 'authenticated' not in st.session_state: st.session_state.authenticated = False
+if 'user_email' not in st.session_state: st.session_state.user_email = ""
+if 'awaiting_otp' not in st.session_state: st.session_state.awaiting_otp = False
+if 'signup_email_temp' not in st.session_state: st.session_state.signup_email_temp = ""
 
 # --- THE LANDING PAGE (If not logged in) ---
 if not st.session_state.authenticated:
-    st.title("🏢 Auto Recruiter: Enterprise Edition")
-    st.markdown("### ⚡ AI-Powered Bulk Resume Mining for Top Agencies")
-    st.markdown("Stop reading resumes one by one. Connect your inbox, paste your Job Description, and let our proprietary AI engine instantly score, rank, and extract candidate data straight to Excel.")
     
-    st.divider()
+    st.markdown("<h1 class='saas-title'>Auto Recruiter</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='saas-subtitle'>The AI-Powered Bulk Resume Engine for Enterprise Staffing</p>", unsafe_allow_html=True)
     
     if supabase is None:
         st.error("⚠️ Database connection missing. Please configure Supabase in Streamlit Secrets.")
         st.stop()
         
-    col1, col2 = st.columns(2)
+    # Center the auth boxes
+    spacer1, col_auth, spacer2 = st.columns([1, 2, 1])
     
-    with col1:
-        st.subheader("Log In")
-        with st.form("login_form"):
-            login_email = st.text_input("Email")
-            login_password = st.text_input("Password", type="password")
-            login_submit = st.form_submit_button("Log In")
-            
-            if login_submit:
+    with col_auth:
+        st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
+        
+        # TABBED UI for Login vs Signup
+        tab1, tab2 = st.tabs(["🔒 Log In", "🚀 Create Account"])
+        
+        with tab1:
+            st.markdown("### Welcome Back")
+            login_email = st.text_input("Work Email", key="log_email")
+            login_password = st.text_input("Password", type="password", key="log_pwd")
+            if st.button("Access Dashboard", use_container_width=True):
                 try:
-                    response = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
+                    res = supabase.auth.sign_in_with_password({"email": login_email, "password": login_password})
                     st.session_state.authenticated = True
                     st.session_state.user_email = login_email
-                    st.success("Login successful! Loading engine...")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Login failed: {e}")
+                    st.error("Invalid credentials or email not verified.")
 
-    with col2:
-        st.subheader("Create an Account")
-        with st.form("signup_form"):
-            signup_email = st.text_input("Work Email")
-            signup_password = st.text_input("Create Password", type="password")
-            signup_submit = st.form_submit_button("Sign Up")
+        with tab2:
+            if not st.session_state.awaiting_otp:
+                st.markdown("### Request Access")
+                signup_email = st.text_input("Work Email *", key="reg_email")
+                signup_phone = st.text_input("Mobile Number * (Required for verification)", key="reg_phone")
+                signup_password = st.text_input("Create Password *", type="password", key="reg_pwd")
+                
+                if st.button("Create Account & Send OTP", use_container_width=True, type="primary"):
+                    if not signup_email or not signup_phone or not signup_password:
+                        st.error("⚠️ All fields (Email, Phone, Password) are mandatory.")
+                    else:
+                        try:
+                            # Sign up and save phone number to user metadata
+                            res = supabase.auth.sign_up({
+                                "email": signup_email, 
+                                "password": signup_password,
+                                "options": {"data": {"phone_number": signup_phone}}
+                            })
+                            st.session_state.awaiting_otp = True
+                            st.session_state.signup_email_temp = signup_email
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Sign up failed: {e}")
             
-            if signup_submit:
-                try:
-                    response = supabase.auth.sign_up({"email": signup_email, "password": signup_password})
-                    st.success("✅ Account created successfully! You can now log in on the left.")
-                except Exception as e:
-                    st.error(f"Sign up failed: {e}")
+            else:
+                # OTP Verification Screen
+                st.markdown(f"### 🔐 Check your email")
+                st.success(f"We sent a 6-digit OTP code to **{st.session_state.signup_email_temp}**")
+                otp_code = st.text_input("Enter 6-Digit OTP Code")
+                
+                if st.button("Verify & Login", use_container_width=True, type="primary"):
+                    try:
+                        res = supabase.auth.verify_otp({
+                            "email": st.session_state.signup_email_temp,
+                            "token": otp_code,
+                            "type": "signup"
+                        })
+                        st.session_state.authenticated = True
+                        st.session_state.user_email = st.session_state.signup_email_temp
+                        st.session_state.awaiting_otp = False
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Invalid or expired OTP code. Please try again.")
+                        
+                if st.button("Cancel / Go Back", use_container_width=True):
+                    st.session_state.awaiting_otp = False
+                    st.rerun()
+                    
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # Stop the app right here so they cannot see the engine!
     st.stop()
+
 
 # ==========================================
 # --- SECURE AREA: MAIN APP LOGIC BELOW ---
 # ==========================================
 
+# Force sidebar open when logged in
+st.set_option('client.showSidebarNavigation', True)
+
 # --- SIDEBAR ---
 with st.sidebar:
-    st.success(f"👤 Logged in as: {st.session_state.user_email}")
-    if st.button("🚪 Log Out"):
+    st.success(f"👤 {st.session_state.user_email}")
+    if st.button("🚪 Log Out", use_container_width=True):
         supabase.auth.sign_out()
         st.session_state.authenticated = False
         st.session_state.user_email = ""
