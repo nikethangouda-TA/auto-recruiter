@@ -7,6 +7,7 @@ import io
 import re
 import base64
 import json
+import time 
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qsl
 
@@ -52,7 +53,7 @@ with st.sidebar:
         with st.expander("❓ How to get a FREE Gemini Key"):
             st.markdown("""
             **Why do I need my own key?**
-            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private to your agency, this app uses a "Bring Your Own Key" model.
+            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private, this app uses a "Bring Your Own Key" model.
             
             1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
             2. Sign in with Google.
@@ -62,7 +63,7 @@ with st.sidebar:
         with st.expander("❓ How to get an OpenAI Key"):
             st.markdown("""
             **Why do I need my own key?**
-            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private to your agency, this app uses a "Bring Your Own Key" model.
+            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private, this app uses a "Bring Your Own Key" model.
             
             1. Go to [OpenAI Platform](https://platform.openai.com/api-keys).
             2. Click **Create new secret key**.
@@ -73,7 +74,7 @@ with st.sidebar:
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text, key, ai_engine):
-    # --- DUAL AI LLM EXTRACTION ---
+    # --- SMART DUAL AI EXTRACTION WITH BACKOFF ---
     if key:
         prompt = f"""
         You are an expert IT Recruiter. Extract candidate details from the following resume text.
@@ -90,33 +91,42 @@ def extract_details(text, jd_text, key, ai_engine):
         "Skills": (String, comma-separated list of the top 5-7 skills matching the JD. "N/A" if no JD),
         "Match": (Integer, 0 to 100 score of how well the candidate fits the Job Description. Return 0 if no JD).
         """
-        try:
-            if "Gemini" in ai_engine:
-                genai.configure(api_key=key)
-                # Updated to the new Gemini 2.5 Flash model!
-                model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
-                response = model.generate_content(prompt)
-                data = json.loads(response.text)
-            else:
-                client = OpenAI(api_key=key)
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" } 
-                )
-                data = json.loads(response.choices[0].message.content)
-            
-            return {
-                "Name": data.get("Name", "N/A"),
-                "Email": data.get("Email", "N/A"),
-                "Phone": data.get("Phone", "N/A"),
-                "Experience": str(data.get("Experience", "N/A")),
-                "Skills": str(data.get("Skills", "N/A")),
-                "Match %": int(data.get("Match", 0)) 
-            }
-        except Exception as e:
-            st.toast(f"{ai_engine.split()[0]} Error: {e}")
-            pass # Fallback to regex below if API fails
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if "Gemini" in ai_engine:
+                    genai.configure(api_key=key)
+                    model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
+                    response = model.generate_content(prompt)
+                    data = json.loads(response.text)
+                else:
+                    client = OpenAI(api_key=key)
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}],
+                        response_format={ "type": "json_object" } 
+                    )
+                    data = json.loads(response.choices[0].message.content)
+                
+                return {
+                    "Name": data.get("Name", "N/A"),
+                    "Email": data.get("Email", "N/A"),
+                    "Phone": data.get("Phone", "N/A"),
+                    "Experience": str(data.get("Experience", "N/A")),
+                    "Skills": str(data.get("Skills", "N/A")),
+                    "Match %": int(data.get("Match", 0)) 
+                }
+            except Exception as e:
+                error_msg = str(e)
+                # If Google throws a 429 Speed Limit error, pause for 10 seconds and try again
+                if "429" in error_msg and attempt < max_retries - 1:
+                    st.toast(f"Google Speed Limit hit! Taking a 10s breather... (Attempt {attempt+1}/{max_retries})")
+                    time.sleep(10)
+                    continue 
+                else:
+                    st.toast(f"AI Fallback triggered: {error_msg}")
+                    break # Break out of loop and use regex fallback
 
     # --- DUMB REGEX FALLBACK ---
     details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
@@ -326,13 +336,13 @@ if is_ready_to_scan:
             if not email_user or not email_pass:
                 st.error("Credentials required.")
             else:
-                with st.spinner("Connecting to Gmail..."):
+                with st.spinner("Mining Resumes at High Speed..."):
                     cands, stat = run_gmail_scan(email_user, email_pass, days_back, jd, api_key, ai_choice)
                     st.session_state.scanned_candidates = cands
                     st.session_state.scan_status = stat
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner("Mining Outlook Resumes..."):
+            with st.spinner("Mining Resumes at High Speed..."):
                 cands, stat = run_outlook_scan(outlook_account, days_back, jd, api_key, ai_choice)
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
@@ -375,7 +385,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
     h7.markdown("**Resume**")
     st.markdown("---")
 
-    for c in display_cands:
+    for i, c in enumerate(display_cands):
         col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 1.5, 1.5, 2, 2, 1, 1])
         with col1: st.write(f"**{c.get('Match %', 0)}%**")
         with col2: st.write(c.get('Name', 'N/A'))
@@ -389,7 +399,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
                 data=c['Bytes'], 
                 file_name=c['Filename'], 
                 mime="application/octet-stream", 
-                key=f"dl_{c['Filename']}"
+                key=f"dl_{i}_{c['Filename']}" # <--- The Duplicate Key Fix!
             )
         st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
 
