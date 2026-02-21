@@ -42,24 +42,27 @@ with st.sidebar:
     days_back = st.number_input("Look back days:", min_value=1, value=365)
     
     st.header("3. Job Description")
-    jd = st.text_area("JD for Ranking:", height=150, placeholder="Paste the JD here (e.g. Python, AWS, 5+ years...)")
+    jd = st.text_area("JD for Ranking:", height=150, placeholder="Paste JD here (e.g. Python, AWS, 5+ years...)")
 
     st.header("4. AI Brain (LLM)")
+    ai_choice = st.radio("Select AI Engine:", ["Google Gemini (Free)", "OpenAI (GPT-4o-mini)"])
     
-    # --- THE NEW BYOK INSTRUCTION MANUAL ---
-    with st.expander("❓ How to get your FREE AI Key", expanded=False):
-        st.markdown("""
-        **Why do I need my own key?**
-        To keep this Enterprise tool 100% free and to guarantee your candidate data remains strictly private to your agency, this app uses a "Bring Your Own Key" (BYOK) model. 
-        
-        **How to get a Free Google Gemini Key (Takes 1 min):**
-        1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
-        2. Sign in with your Google account.
-        3. Click the blue **Create API key** button.
-        4. Copy the long text string and paste it below!
-        """)
-        
-    ai_api_key = st.text_input("Paste your Gemini API Key here:", type="password", placeholder="AI-... ")
+    if "Gemini" in ai_choice:
+        with st.expander("❓ How to get a FREE Gemini Key"):
+            st.markdown("""
+            1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
+            2. Sign in with Google.
+            3. Click **Create API key**.
+            """)
+    else:
+        with st.expander("❓ How to get an OpenAI Key"):
+            st.markdown("""
+            1. Go to [OpenAI Platform](https://platform.openai.com/api-keys).
+            2. Click **Create new secret key**.
+            3. *Note: Requires a $5 minimum credit balance in Settings > Billing.*
+            """)
+            
+    api_key = st.text_input(f"Paste your {ai_choice.split()[0]} Key here:", type="password")
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text, api_key=None):
@@ -379,4 +382,5 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
 
 elif "scan_status" in st.session_state and st.session_state.scan_status != "Success":
     st.warning(st.session_state.scan_status)
+
 
