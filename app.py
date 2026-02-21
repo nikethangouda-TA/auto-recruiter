@@ -18,6 +18,7 @@ try:
     from O365 import Account
     from openai import OpenAI
     import google.generativeai as genai
+    import anthropic
 except ImportError:
     pass
 
@@ -47,34 +48,37 @@ with st.sidebar:
     jd = st.text_area("JD for Ranking:", height=150, placeholder="Paste JD here (e.g. Python, AWS, 5+ years...)")
 
     st.header("4. AI Brain (LLM)")
-    ai_choice = st.radio("Select AI Engine:", ["Google Gemini (Free)", "OpenAI (GPT-4o-mini)"])
+    ai_choice = st.radio("Select AI Engine:", [
+        "Anthropic Claude 3.5 (Best Accuracy)", 
+        "OpenAI (GPT-4o-mini)", 
+        "Google Gemini (Free)"
+    ])
     
-    if "Gemini" in ai_choice:
+    if "Claude" in ai_choice:
+        with st.expander("❓ How to get a Claude Key"):
+            st.markdown("""
+            1. Go to [Anthropic Console](https://console.anthropic.com/).
+            2. Sign up and verify your phone number (usually grants $5 free credits).
+            3. Go to API Keys and create a new key.
+            """)
+    elif "Gemini" in ai_choice:
         with st.expander("❓ How to get a FREE Gemini Key"):
             st.markdown("""
-            **Why do I need my own key?**
-            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private, this app uses a "Bring Your Own Key" model.
-            
             1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
-            2. Sign in with Google.
-            3. Click **Create API key**.
+            2. Sign in with Google and click **Create API key**.
             """)
     else:
         with st.expander("❓ How to get an OpenAI Key"):
             st.markdown("""
-            **Why do I need my own key?**
-            To keep this Enterprise tool 100% free and to guarantee your candidate data remains private, this app uses a "Bring Your Own Key" model.
-            
             1. Go to [OpenAI Platform](https://platform.openai.com/api-keys).
-            2. Click **Create new secret key**.
-            3. *Note: Requires a $5 minimum credit balance in Settings > Billing.*
+            2. Click **Create new secret key** (requires $5 minimum balance).
             """)
             
-    api_key = st.text_input(f"Paste your {ai_choice.split()[0]} Key here:", type="password")
+    api_key = st.text_input(f"Paste your Key here:", type="password")
 
 # --- SHARED HELPERS ---
 def extract_details(text, jd_text, key, ai_engine):
-    # --- SMART DUAL AI EXTRACTION WITH BACKOFF ---
+    # --- SMART AI EXTRACTION WITH BACKOFF ---
     if key:
         prompt = f"""
         You are an expert IT Recruiter. Extract candidate details from the following resume text.
@@ -83,19 +87,35 @@ def extract_details(text, jd_text, key, ai_engine):
         
         Resume Text: {text[:6000]} 
         
-        Respond STRICTLY with a valid JSON object containing exactly these keys:
-        "Name": (String, candidate's full name, or "N/A"),
-        "Email": (String, or "N/A"),
-        "Phone": (String, or "N/A"),
-        "Experience": (String, calculate total years of relevant experience, e.g., "7 Years", or "N/A"),
-        "Skills": (String, comma-separated list of the top 5-7 skills matching the JD. "N/A" if no JD),
-        "Match": (Integer, 0 to 100 score of how well the candidate fits the Job Description. Return 0 if no JD).
+        Respond STRICTLY with a valid JSON object containing exactly these keys. Do not include markdown formatting or any other text.
+        {{
+            "Name": "candidate full name or N/A",
+            "Email": "email or N/A",
+            "Phone": "phone or N/A",
+            "Experience": "calculate total years, e.g. 7 Years, or N/A",
+            "Skills": "comma-separated list of top 5 skills, or N/A",
+            "Match": integer from 0 to 100 representing JD fit
+        }}
         """
         
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                if "Gemini" in ai_engine:
+                if "Claude" in ai_engine:
+                    client = anthropic.Anthropic(api_key=key)
+                    response = client.messages.create(
+                        model="claude-3-5-sonnet-20241022",
+                        max_tokens=1000,
+                        temperature=0,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    # Claude sometimes wraps JSON in markdown blocks, this strips it
+                    raw_text = response.content[0].text.strip()
+                    if raw_text.startswith("```json"):
+                        raw_text = raw_text[7:-3].strip()
+                    data = json.loads(raw_text)
+
+                elif "Gemini" in ai_engine:
                     genai.configure(api_key=key)
                     model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
                     response = model.generate_content(prompt)
@@ -115,34 +135,30 @@ def extract_details(text, jd_text, key, ai_engine):
                     "Phone": data.get("Phone", "N/A"),
                     "Experience": str(data.get("Experience", "N/A")),
                     "Skills": str(data.get("Skills", "N/A")),
-                    "Match %": int(data.get("Match", 0)) 
+                    "Match %": int(data.get("Match", 0) or data.get("Match %", 0)) 
                 }
             except Exception as e:
-                error_msg = str(e)
-                # If Google throws a 429 Speed Limit error, pause for 10 seconds and try again
+                error_msg = str(e).lower()
                 if "429" in error_msg and attempt < max_retries - 1:
-                    st.toast(f"Google Speed Limit hit! Taking a 10s breather... (Attempt {attempt+1}/{max_retries})")
+                    st.toast(f"Speed Limit hit! Taking a breather... (Attempt {attempt+1}/{max_retries})")
                     time.sleep(10)
                     continue 
                 else:
-                    st.toast(f"AI Fallback triggered: {error_msg}")
-                    break # Break out of loop and use regex fallback
+                    st.toast(f"AI Error: {e}")
+                    break 
 
     # --- DUMB REGEX FALLBACK ---
     details = {"Name": "N/A", "Phone": "N/A", "Email": "N/A", "Experience": "N/A", "Skills": "N/A", "Match %": 0}
-    
     phone_pattern = r'[\+\(]?[1-9][0-9 .\-\(\)]{8,}[0-9]'
     phones = re.findall(phone_pattern, text)
     if phones:
         valid_phones = [p for p in phones if len(re.sub(r'\D', '', p)) > 9]
         if valid_phones: details["Phone"] = valid_phones[0]
-
     email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     emails = re.findall(email_pattern, text)
     if emails: 
         details["Email"] = emails[0]
         details["Name"] = emails[0].split('@')[0]
-
     exp_pattern = r'(\d+)\+?\s*years?'
     exps = re.findall(exp_pattern, text.lower())
     if exps:
@@ -150,7 +166,6 @@ def extract_details(text, jd_text, key, ai_engine):
             years = [int(x) for x in exps]
             details["Experience"] = f"{max(years)} Years"
         except Exception: pass
-
     return details
 
 def read_file_content(file_bytes, filename):
@@ -336,13 +351,13 @@ if is_ready_to_scan:
             if not email_user or not email_pass:
                 st.error("Credentials required.")
             else:
-                with st.spinner("Mining Resumes at High Speed..."):
+                with st.spinner("Mining Resumes..."):
                     cands, stat = run_gmail_scan(email_user, email_pass, days_back, jd, api_key, ai_choice)
                     st.session_state.scanned_candidates = cands
                     st.session_state.scan_status = stat
         
         elif provider == "Outlook / Office 365 (Corporate)":
-            with st.spinner("Mining Resumes at High Speed..."):
+            with st.spinner("Mining Resumes..."):
                 cands, stat = run_outlook_scan(outlook_account, days_back, jd, api_key, ai_choice)
                 st.session_state.scanned_candidates = cands
                 st.session_state.scan_status = stat
@@ -399,7 +414,7 @@ if "scanned_candidates" in st.session_state and st.session_state.scanned_candida
                 data=c['Bytes'], 
                 file_name=c['Filename'], 
                 mime="application/octet-stream", 
-                key=f"dl_{i}_{c['Filename']}" # <--- The Duplicate Key Fix!
+                key=f"dl_{i}_{c['Filename']}"
             )
         st.markdown("<hr style='margin: 0px; opacity: 0.2;'>", unsafe_allow_html=True)
 
